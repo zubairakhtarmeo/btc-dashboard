@@ -1,0 +1,162 @@
+{
+  "ALTERNATIVE_DATA": {
+    "enabled": true,
+    "google_trends": true,
+    "nft_activity": false,
+    "derivatives_data": true,
+    "funding_rates": true,
+    "liquidations": true,
+    "options_flow": true,
+    "collection_interval_minutes": 60
+  },
+  "API_KEYS": {
+    "newsapi": "",
+    "twitter": "",
+    "reddit": "",
+    "glassnode": "",
+    "coingecko": "",
+    "binance": "",
+    "cryptopanic": "",
+    "opensea": ""
+  },
+  "BACKTESTING": {
+    "enabled": false,
+    "initial_capital": 10000.0,
+    "position_size": 0.1,
+    "transaction_cost": 0.001,
+    "walk_forward_window": 720
+  },
+  "DATA_COLLECTION": {
+    "default_symbol": "bitcoin",
+    "update_interval_minutes": 60,
+    "historical_hours": 720,
+    "price_interval": "1h",
+    "max_news_articles": 100,
+    "max_social_posts": 1000
+  },
+  "ENSEMBLE": {
+    "use_ensemble": true,
+    "model_architectures": [
+      "lstm",
+      "gru",
+      "tcn",
+      "hybrid"
+    ],
+    "use_time_series_cv": true,
+    "n_cv_splits": 3
+  },
+  "EXPLAINABILITY": {
+    "enabled": true,
+    "use_shap": true,
+    "extract_attention": true,
+    "feature_importance_method": "perturbation",
+    "top_features_display": 10,
+    "generate_visualizations": true,
+    "save_explanations": true,
+    "explanation_path": "explanations/"
+  },
+  "FEATURES": {
+    "technical_indicators": true,
+    "sentiment_analysis": true,
+    "onchain_metrics": true,
+    "market_indicators": true,
+    "lag_features": true,
+    "rolling_windows": [
+      7,
+      14,
+      30,
+      168
+    ]
+  },
+  "LOGGING": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file": "crypto_predictor.log",
+    "max_bytes": 10485760,
+    "backup_count": 5
+  },
+  "MODEL": {
+    "sequence_length": 60,
+    "prediction_horizons": [
+      1,
+      6,
+      24
+    ],
+    "n_features": 50,
+    "architecture": "hybrid",
+    "lstm_units": [
+      128,
+      64
+    ],
+    "gru_units": [
+      128,
+      64
+    ],
+    "tcn_filters": [
+      64,
+      64
+    ],
+    "attention_heads": 4,
+    "attention_key_dim": 32,
+    "dense_units": [
+      64,
+      32
+    ],
+    "dropout_rate": 0.3,
+    "learning_rate": 0.001,
+    "batch_size": 32,
+    "epochs": 100,
+    "validation_split": 0.2,
+    "early_stopping_patience": 15,
+    "use_mixed_precision": true,
+    "mc_dropout_samples": 10
+  },
+  "PATHS": {
+    "models": "models/",
+    "data": "data/",
+    "logs": "logs/",
+    "cache": "cache/"
+  },
+  "PERFORMANCE": {
+    "use_gpu": true,
+    "num_workers": 4,
+    "cache_data": true,
+    "parallel_data_collection": true
+  },
+  "PORTFOLIO": {
+    "enabled": false,
+    "total_capital": 10000.0,
+    "max_position_size": 0.2,
+    "risk_free_rate": 0.02,
+    "rebalance_threshold": 0.05,
+    "optimization_method": "sharpe",
+    "min_assets": 3,
+    "max_assets": 10,
+    "correlation_lookback": 90
+  },
+  "REGIME_DETECTION": {
+    "enabled": true,
+    "lookback_window": 100,
+    "volatility_window": 20,
+    "regime_threshold": 0.15,
+    "adapt_model_parameters": true,
+    "regime_history_length": 50
+  },
+  "SENTIMENT": {
+    "use_transformers": true,
+    "news_weight": 0.6,
+    "social_weight": 0.4,
+    "sentiment_window_hours": 24,
+    "anomaly_threshold": 2.0
+  },
+  "SIGNALS": {
+    "risk_tolerance": "medium",
+    "min_confidence": 0.65,
+    "use_stop_loss": true,
+    "position_size_limits": {
+      "low": 0.05,
+      "medium": 0.1,
+      "high": 0.2
+    }
+  }
+}
