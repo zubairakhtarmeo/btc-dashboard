@@ -323,7 +323,7 @@ st.markdown("""
         background: linear-gradient(90deg, #1e2139 0%, #2d3250 100%);
         padding: 1rem 2rem;
         border-bottom: 1px solid rgba(99, 102, 241, 0.2);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -361,7 +361,7 @@ st.markdown("""
         border-radius: 16px;
         padding: 2.5rem;
         margin: 2rem 0;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
         text-align: center;
         position: relative;
         overflow: hidden;
@@ -392,7 +392,7 @@ st.markdown("""
         font-weight: 700;
         letter-spacing: -1px;
         margin: 0.5rem 0;
-        text-shadow: 0 2px 10px rgba(99, 102, 241, 0.3);
+        text-shadow: 0 1px 6px rgba(99, 102, 241, 0.18);
     }
     
     .price-change {
@@ -423,17 +423,17 @@ st.markdown("""
         border-radius: 12px;
         padding: 1.5rem;
         margin: 0.5rem 0;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-        transition: all 0.3s ease;
+        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+        transition: all 0.2s ease;
         height: 100%;
         position: relative;
         overflow: hidden;
     }
     
     .kpi-card:hover {
-        transform: translateY(-8px);
-        box-shadow: 0 12px 32px rgba(99, 102, 241, 0.3);
-        border-color: rgba(99, 102, 241, 0.6);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 22px rgba(99, 102, 241, 0.18);
+        border-color: rgba(99, 102, 241, 0.35);
     }
     
     .kpi-header {
@@ -507,7 +507,7 @@ st.markdown("""
         border-radius: 10px;
         transition: width 0.6s ease;
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+        box-shadow: none;
     }
     
     .confidence-value {
@@ -552,7 +552,7 @@ st.markdown("""
         color: #f1f5f9;
         font-size: 1.5rem;
         font-weight: 700;
-        margin: 4rem 0 2rem 0;
+        margin: 3rem 0 1.75rem 0;
         padding-bottom: 1rem;
         border-bottom: 2px solid rgba(99, 102, 241, 0.3);
         display: flex;
@@ -561,7 +561,8 @@ st.markdown("""
     }
     
     .section-icon {
-        font-size: 1.8rem;
+        font-size: 1.4rem;
+        opacity: 0.85;
     }
     
     /* Chart Container */
@@ -571,7 +572,7 @@ st.markdown("""
         border-radius: 12px;
         padding: 1.5rem;
         margin: 1rem 0;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
     }
     
     /* Metrics Grid */
@@ -589,7 +590,7 @@ st.markdown("""
         border-radius: 12px;
         padding: 1.25rem;
         text-align: center;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
     }
     
     .metric-label {
@@ -613,7 +614,7 @@ st.markdown("""
         border: 1px solid rgba(148, 163, 184, 0.1);
         border-radius: 12px;
         padding: 1.25rem;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
     }
     
     [data-testid="stMetric"] label {
@@ -1091,20 +1092,21 @@ def main():
     
     # Model Accuracy Banner - MOST IMPORTANT
     st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); 
-                    border: 2px solid #22c55e; border-radius: 16px; padding: 1.5rem 2rem; 
-                    margin: 1.5rem 0 2rem 0; text-align: center; box-shadow: 0 8px 32px rgba(34, 197, 94, 0.4);">
-            <div style="display: flex; align-items: center; justify-content: center; gap: 1rem;">
-                <span style="font-size: 2.5rem;">🎯</span>
-                <div style="text-align: left;">
-                    <div style="color: rgba(255, 255, 255, 0.9); font-size: 0.85rem; font-weight: 600; 
-                                text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 0.3rem;">Model Accuracy</div>
-                    <div style="color: #ffffff; font-size: 2.5rem; font-weight: 800; letter-spacing: -1px; line-height: 1;">85.3%</div>
+        <div style="background: rgba(34, 197, 94, 0.10);
+                    border: 1px solid rgba(34, 197, 94, 0.35);
+                    border-radius: 14px;
+                    padding: 1.25rem 1.5rem;
+                    margin: 1.5rem 0 2rem 0;
+                    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+                <div>
+                    <div style="color: rgba(241, 245, 249, 0.9); font-size: 0.8rem; font-weight: 600;
+                                text-transform: uppercase; letter-spacing: 1.2px;">Model Accuracy</div>
+                    <div style="color: #f1f5f9; font-size: 2.2rem; font-weight: 800; letter-spacing: -0.6px; line-height: 1.1;">85.3%</div>
                 </div>
-                <span style="font-size: 2rem; margin-left: 1rem;">✓</span>
-            </div>
-            <div style="color: rgba(255, 255, 255, 0.85); font-size: 0.8rem; margin-top: 0.75rem; font-weight: 500;">
-                Live 24H validation shown below (Predicted vs Actual)
+                <div style="color: rgba(241, 245, 249, 0.75); font-size: 0.78rem; font-weight: 500;">
+                    Live 24H validation shown below (Predicted vs Actual)
+                </div>
             </div>
             {validation_summary_html}
         </div>
@@ -1195,14 +1197,14 @@ def main():
                 border: 1px solid rgba(148, 163, 184, 0.1);
                 border-radius: 12px;
                 padding: 1.5rem;
-                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-                transition: all 0.3s ease;
+                box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+                transition: all 0.2s ease;
                 height: 100%;
             }}
             .kpi-card-{i}:hover {{
-                transform: translateY(-4px);
-                box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
-                border-color: rgba(99, 102, 241, 0.4);
+                transform: translateY(-2px);
+                box-shadow: 0 8px 22px rgba(99, 102, 241, 0.16);
+                border-color: rgba(99, 102, 241, 0.25);
             }}
             </style>
             <div class="kpi-card-{i}">
@@ -1216,7 +1218,7 @@ def main():
                 <div style="margin: 1rem 0;">
                     <div style="color: #94a3b8; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.3rem;">Confidence</div>
                     <div style="height: 6px; background: rgba(148, 163, 184, 0.1); border-radius: 10px; overflow: hidden;">
-                        <div style="height: 100%; width: {card['confidence']*100}%; border-radius: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);"></div>
+                        <div style="height: 100%; width: {card['confidence']*100}%; border-radius: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);"></div>
                     </div>
                     <div style="color: #e2e8f0; font-size: 0.75rem; font-weight: 600; margin-top: 0.3rem;">{card['confidence']*100:.1f}%</div>
                 </div>
@@ -1258,14 +1260,14 @@ def main():
                 border: 1px solid rgba(148, 163, 184, 0.1);
                 border-radius: 12px;
                 padding: 1.5rem;
-                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-                transition: all 0.3s ease;
+                box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+                transition: all 0.2s ease;
                 height: 100%;
             }}
             .kpi-card-{idx}:hover {{
-                transform: translateY(-4px);
-                box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
-                border-color: rgba(99, 102, 241, 0.4);
+                transform: translateY(-2px);
+                box-shadow: 0 8px 22px rgba(99, 102, 241, 0.16);
+                border-color: rgba(99, 102, 241, 0.25);
             }}
             </style>
             <div class="kpi-card-{idx}">
@@ -1279,7 +1281,7 @@ def main():
                 <div style="margin: 1rem 0;">
                     <div style="color: #94a3b8; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.3rem;">Confidence</div>
                     <div style="height: 6px; background: rgba(148, 163, 184, 0.1); border-radius: 10px; overflow: hidden;">
-                        <div style="height: 100%; width: {card['confidence']*100}%; border-radius: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);"></div>
+                        <div style="height: 100%; width: {card['confidence']*100}%; border-radius: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);"></div>
                     </div>
                     <div style="color: #e2e8f0; font-size: 0.75rem; font-weight: 600; margin-top: 0.3rem;">{card['confidence']*100:.1f}%</div>
                 </div>
