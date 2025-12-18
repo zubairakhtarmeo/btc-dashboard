@@ -5,87 +5,68 @@ Bloomberg Terminal Style - AI-Powered Multi-Horizon Predictions
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime, timedelta
-import json
-from pathlib import Path
-import sys
-import pickle
-import streamlit.components.v1 as components
-import os
+    # AI Predictions Section Header (essentials first)
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">🔮</span>
+            <span>AI Predictions</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<div style="color: rgba(148, 163, 184, 0.95); font-size: 0.85rem; margin-bottom: 1rem;">Multi-horizon forecasts (scan first; details below)</div>', unsafe_allow_html=True)
 
-# Page configuration - MUST be first Streamlit command
-st.set_page_config(
-    page_title="BTC Forecasting & Market Intelligence",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+    # Progressive disclosure: validation details in an expander
+    with st.expander("Model validation (24H predicted vs actual)", expanded=False):
+        if validation_summary_html:
+            st.markdown(validation_summary_html, unsafe_allow_html=True)
+        if not validation_chart_df.empty:
+            fig_val = go.Figure()
+            fig_val.add_trace(go.Scatter(
+                x=validation_chart_df['target_at'],
+                y=validation_chart_df['predicted'],
+                mode='lines+markers',
+                name='Predicted (24H)',
+                line=dict(color='#22c55e', width=2, dash='dash'),
+                marker=dict(size=6, color='#22c55e', line=dict(color='#0f172a', width=1)),
+                hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
+            ))
+            fig_val.add_trace(go.Scatter(
+                x=validation_chart_df['target_at'],
+                y=validation_chart_df['actual'],
+                mode='lines+markers',
+                name='Actual',
+                line=dict(color='#667eea', width=2),
+                marker=dict(size=6, color='#667eea', line=dict(color='#0f172a', width=1)),
+                hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
+            ))
 
-# Add project root to path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+            fig_val.update_layout(
+                title=dict(
+                    text='24H Validation: Predicted vs Actual',
+                    font=dict(size=14, color='#f1f5f9', weight=600)
+                ),
+                xaxis_title='Target Time (UTC)',
+                yaxis_title='Price (USD)',
+                hovermode='x unified',
+                height=260,
+                template='plotly_dark',
+                paper_bgcolor='rgba(30, 41, 59, 0.35)',
+                plot_bgcolor='rgba(30, 41, 59, 0.35)',
+                font=dict(size=11, color='#94a3b8'),
+                margin=dict(t=50, b=40, l=40, r=40),
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='right',
+                    x=1,
+                    bgcolor='rgba(30, 41, 59, 0.8)',
+                    bordercolor='rgba(148, 163, 184, 0.2)',
+                    borderwidth=1
+                )
+            )
 
-from enhanced_predictor import EnhancedCryptoPricePredictor, TemporalConvLayer, MultiHeadAttentionCustom
-from data_collector import CryptoDataCollector
-import keras
-
-# Define paths
-MODELS_DIR = project_root / 'models'
-MODEL_PATH = MODELS_DIR / 'bitcoin_real_simplified_model.h5'
-METADATA_PATH = MODELS_DIR / 'bitcoin_real_simplified_metadata.pkl'
-
-# Best-effort persistence for 24H prediction validation
-VALIDATION_24H_PATH = project_root / 'cache' / 'validation_24h.json'
-
-# Best-effort persistence for storing predictions over time
-PREDICTION_LOG_PATH = project_root / 'cache' / 'prediction_log.json'
-
-
-def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
-    """Best-effort: ensure the dataframe index is DatetimeIndex for plotting.
-
-    Handles common cases:
-    - DatetimeIndex already
-    - timestamp/time/date/datetime column
-    - numeric epoch index (seconds/ms/us/ns)
-    """
-    if isinstance(df.index, pd.DatetimeIndex):
-        return df
-
-    # Prefer an explicit timestamp column if present
-    for col in ("timestamp", "time", "date", "datetime"):
-        if col in df.columns:
-            try:
-                out = df.copy()
-                out[col] = pd.to_datetime(out[col], utc=True, errors="coerce")
-                out = out.dropna(subset=[col]).set_index(col)
-                return out
-            except Exception:
-                pass
-
-    # Try converting the index
-    try:
-        out = df.copy()
-        idx = out.index
-
-        # If numeric, attempt epoch unit inference
-        if pd.api.types.is_numeric_dtype(idx):
-            s = pd.Series(idx)
-            max_val = float(pd.to_numeric(s, errors="coerce").max())
-            unit = None
-            if max_val > 1e17:
-                unit = "ns"
-            elif max_val > 1e14:
-                unit = "us"
-            elif max_val > 1e11:
-                unit = "ms"
-            elif max_val > 1e9:
-                unit = "s"
-
-            if unit is not None:
+            st.plotly_chart(fig_val, use_container_width=True)
                 out.index = pd.to_datetime(out.index, unit=unit, utc=True, errors="coerce")
             else:
                 out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
@@ -389,68 +370,84 @@ st.markdown("""
         box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
     }
 
-    /* Compact KPI Bar (Price / Change / Interval) */
-    .kpi-bar {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.75) 0%, rgba(51, 65, 85, 0.75) 100%);
-        border: 1px solid rgba(148, 163, 184, 0.14);
-        border-radius: 12px;
-        padding: 0.85rem 1rem;
-        margin: 0.4rem 0 1rem 0;
-        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
-        display: flex;
+    /* Centered Price Panel (contained instrument panel, not edge-to-edge) */
+    .price-panel {
+        max-width: 1040px;
+        width: 100%;
+        margin: 0.35rem auto 0.85rem auto;
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.70) 0%, rgba(51, 65, 85, 0.70) 100%);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 14px;
+        padding: 0.65rem 0.9rem;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.20);
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
         align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        flex-wrap: wrap;
-    }
-
-    .kpi-group {
-        display: flex;
-        align-items: baseline;
         gap: 0.75rem;
-        flex-wrap: wrap;
     }
 
-    .kpi-label {
+    .price-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.18rem;
+        min-width: 0;
+    }
+
+    .price-meta.left { text-align: left; }
+    .price-meta.right { text-align: right; }
+
+    .meta-label {
         color: rgba(148, 163, 184, 0.95);
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 1px;
+        letter-spacing: 0.9px;
+        line-height: 1.1;
     }
 
-    .kpi-value {
-        color: #f1f5f9;
-        font-size: 1.9rem;
-        font-weight: 800;
-        letter-spacing: -0.6px;
-        line-height: 1;
-    }
-
-    .kpi-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        padding: 0.28rem 0.65rem;
-        border-radius: 999px;
-        font-size: 0.78rem;
-        font-weight: 700;
-        letter-spacing: 0.1px;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        background: rgba(15, 23, 42, 0.30);
+    .meta-value {
         color: rgba(226, 232, 240, 0.92);
+        font-size: 0.9rem;
+        font-weight: 700;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
-    .kpi-badge.positive {
-        border-color: rgba(34, 197, 94, 0.35);
-        color: #22c55e;
-        background: rgba(34, 197, 94, 0.10);
+    .meta-value.positive { color: #22c55e; }
+    .meta-value.negative { color: #ef4444; }
+
+    .price-center {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        min-width: 0;
     }
 
-    .kpi-badge.negative {
-        border-color: rgba(239, 68, 68, 0.35);
-        color: #ef4444;
-        background: rgba(239, 68, 68, 0.10);
+    .price-center-label {
+        color: rgba(148, 163, 184, 0.95);
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.1px;
+        line-height: 1.1;
+    }
+
+    .price-center-value {
+        color: #f1f5f9;
+        font-size: 2.35rem;
+        font-weight: 900;
+        letter-spacing: -0.8px;
+        line-height: 1.05;
+        margin-top: 0.15rem;
+    }
+
+    @media (max-width: 900px) {
+        .price-panel { grid-template-columns: 1fr; gap: 0.55rem; }
+        .price-meta.left, .price-meta.right { text-align: center; }
     }
     
     .price-label {
@@ -1103,7 +1100,7 @@ def main():
         st.error(f"⚠️ Failed to fetch live data: {error}")
         st.stop()
     
-    # Compact KPI bar (price + real 24H change + interval)
+    # Compact centered price panel (contained instrument panel)
     price_24h_ago = price_data['close'].iloc[-25] if len(price_data) >= 25 else price_data['close'].iloc[0]
     change_24h = ((current_price - price_24h_ago) / price_24h_ago) * 100
     change_class = "positive" if change_24h >= 0 else "negative"
@@ -1111,18 +1108,20 @@ def main():
 
     st.markdown(
         f"""
-        <div class="kpi-bar">
-            <div class="kpi-group">
-                <span class="kpi-label">BTC Price</span>
-                <span class="kpi-value">${current_price:,.2f}</span>
+        <div class="price-panel">
+            <div class="price-meta left">
+                <div class="meta-label">Change (24H)</div>
+                <div class="meta-value {change_class}">{change_symbol} {abs(change_24h):.2f}%</div>
             </div>
-            <div class="kpi-group">
-                <span class="kpi-label">Change</span>
-                <span class="kpi-badge {change_class}">{change_symbol} {abs(change_24h):.2f}%</span>
+
+            <div class="price-center">
+                <div class="price-center-label">BTC Price</div>
+                <div class="price-center-value">${current_price:,.2f}</div>
             </div>
-            <div class="kpi-group">
-                <span class="kpi-label">Interval</span>
-                <span class="kpi-badge">24H</span>
+
+            <div class="price-meta right">
+                <div class="meta-label">Interval</div>
+                <div class="meta-value">1H candles</div>
             </div>
         </div>
         """,
@@ -1381,11 +1380,12 @@ def main():
         </div>
     """, unsafe_allow_html=True)
     
-    # TradingView Live Chart Section
-    st.markdown('<div style="color: #94a3b8; font-size: 0.9rem; margin: 1rem 0 1rem 0;">Real-time market data with professional trading tools</div>', unsafe_allow_html=True)
-    
-    # Embedded TradingView Widget
-    tradingview_html = """
+    # TradingView Live Chart Section (progressive disclosure)
+    with st.expander("Live chart (TradingView)", expanded=False):
+        st.markdown('<div style="color: #94a3b8; font-size: 0.85rem; margin: 0.25rem 0 0.75rem 0;">Real-time market data with professional trading tools</div>', unsafe_allow_html=True)
+
+        # Embedded TradingView Widget
+        tradingview_html = """
     <!-- TradingView Widget BEGIN -->
     <div class="tradingview-widget-container" style="height: 500px; margin-bottom: 0;">
       <div class="tradingview-widget-container__widget" style="height: calc(100% - 32px); width: 100%;"></div>
@@ -1411,7 +1411,7 @@ def main():
     </div>
     <!-- TradingView Widget END -->
     """
-    components.html(tradingview_html, height=500)
+                components.html(tradingview_html, height=520)
     
     st.markdown('<div style="margin: 1rem 0 1rem 0;"><div class="section-header" style="margin: 0;"><span class="section-icon">📈</span><span>AI Model Analytics</span></div></div>', unsafe_allow_html=True)
     
