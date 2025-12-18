@@ -206,8 +206,81 @@ class PriceDataCollector:
         cache_key = f"price_{symbol}_{hours_back}_{interval}"
         cached_data = self._load_from_cache(cache_key)
         if cached_data is not None and self.use_cache:
-            logger.info(f"Using cached price data for {symbol}")
-            return cached_data
+            try:
+                closes = cached_data['close'] if isinstance(cached_data, pd.DataFrame) and 'close' in cached_data.columns else None
+                if closes is not None:
+                    # If cached data is nearly constant, it's likely synthetic/clipped fallback; refetch instead.
+                    if closes.nunique(dropna=True) <= 3 or float(closes.std(skipna=True)) < 1e-6:
+                        logger.warning(f"Cached price data for {symbol} looks flat; ignoring cache")
+                        # Best-effort: delete the bad cache so we don't keep re-reading it
+                        try:
+                            cache_file = os.path.join(CACHE_DIR, f"{cache_key}.pkl")
+                            if os.path.exists(cache_file):
+                                os.remove(cache_file)
+                        except Exception:
+                            pass
+                    else:
+                        logger.info(f"Using cached price data for {symbol}")
+                        return cached_data
+                else:
+                    logger.info(f"Using cached price data for {symbol}")
+                    return cached_data
+            except Exception:
+                logger.info(f"Using cached price data for {symbol}")
+                return cached_data
+
+        def _is_flat_close(df: pd.DataFrame) -> bool:
+            try:
+                if df is None or not isinstance(df, pd.DataFrame) or 'close' not in df.columns or len(df) < 10:
+                    return True
+                s = pd.to_numeric(df['close'], errors='coerce').dropna()
+                if len(s) < 10:
+                    return True
+                return (s.nunique() <= 3) or (float(s.std()) < 1e-6)
+            except Exception:
+                return True
+
+        # Prefer Binance klines first (real OHLCV, usually reliable)
+        try:
+            binance_symbol = self._to_binance_symbol(symbol)
+            interval_map = {'1h': '1h', '4h': '4h', '1d': '1d'}
+            candle_interval = interval_map.get(interval, '1h')
+
+            interval_hours = {'1h': 1, '4h': 4, '1d': 24}.get(candle_interval, 1)
+            limit = int(np.ceil(hours_back / interval_hours))
+            limit = max(1, min(limit, 1000))  # Binance limit
+
+            url = f"{self.base_url_binance}/klines"
+            params = {'symbol': binance_symbol, 'interval': candle_interval, 'limit': limit}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            klines = response.json()
+            if isinstance(klines, list) and len(klines) > 0:
+                df = pd.DataFrame(
+                    klines,
+                    columns=[
+                        'open_time', 'open', 'high', 'low', 'close', 'volume',
+                        'close_time', 'quote_asset_volume', 'number_of_trades',
+                        'taker_buy_base', 'taker_buy_quote', 'ignore'
+                    ]
+                )
+                df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms', utc=True).dt.tz_convert(None)
+                df = df.set_index('timestamp')
+
+                for c in ['open', 'high', 'low', 'close', 'volume']:
+                    df[c] = pd.to_numeric(df[c], errors='coerce')
+
+                df['market_cap'] = df['close'] * 19e6  # Approx BTC supply placeholder
+                df = df[['open', 'high', 'low', 'close', 'volume', 'market_cap']].dropna(subset=['close'])
+
+                if not _is_flat_close(df):
+                    logger.info(f"Collected {len(df)} price records from Binance for {symbol}")
+                    self._save_to_cache(cache_key, df)
+                    return df
+                else:
+                    logger.warning("Binance returned flat/invalid close series; falling back")
+        except Exception as e:
+            logger.warning(f"Binance API failed: {e}")
         
         # Try multiple free APIs
         try:
@@ -239,9 +312,12 @@ class PriceDataCollector:
                 
                 df = df[['open', 'high', 'low', 'close', 'volume', 'market_cap']]
                 logger.info(f"Collected {len(df)} price records from CoinCap for {symbol}")
-                
-                self._save_to_cache(cache_key, df)
-                return df
+
+                if not _is_flat_close(df):
+                    self._save_to_cache(cache_key, df)
+                    return df
+                else:
+                    logger.warning("CoinCap returned flat/invalid close series; falling back")
                 
         except Exception as e:
             logger.warning(f"CoinCap API failed: {e}")
@@ -281,23 +357,47 @@ class PriceDataCollector:
             return df
             
         except Exception as e:
-            logger.error(f"All APIs failed: {e}")
-            # Return realistic dummy data
-            dummy_df = self._generate_dummy_price_data(hours_back)
-            self._save_to_cache(cache_key, dummy_df)
-            return dummy_df
+            logger.warning(f"CoinGecko API failed: {e}")
+
+        logger.error("All price APIs failed; using synthetic fallback data")
+        dummy_df = self._generate_dummy_price_data(hours_back)
+        self._save_to_cache(cache_key, dummy_df)
+        return dummy_df
+
+    def _to_binance_symbol(self, symbol: str) -> str:
+        """Best-effort mapping from common ids/names to Binance tickers."""
+        s = (symbol or '').strip().upper()
+        if not s:
+            return 'BTCUSDT'
+
+        if s.endswith('USDT'):
+            return s
+
+        mapping = {
+            'BITCOIN': 'BTC',
+            'BTC': 'BTC',
+            'ETHEREUM': 'ETH',
+            'ETH': 'ETH',
+            'SOLANA': 'SOL',
+            'SOL': 'SOL',
+            'DOGECOIN': 'DOGE',
+            'DOGE': 'DOGE',
+            'RIPPLE': 'XRP',
+            'XRP': 'XRP',
+        }
+        base = mapping.get(s, s)
+        return f"{base}USDT"
     
     def _generate_dummy_price_data(self, hours: int) -> pd.DataFrame:
         """Generate realistic synthetic price data for testing"""
         dates = pd.date_range(end=datetime.now(), periods=hours, freq='1h')
         
-        # Random walk for price with realistic BTC range (70k-95k)
-        np.random.seed(42)
-        returns = np.random.normal(0.0001, 0.015, hours)  # Lower volatility
-        price = 86000 * np.exp(np.cumsum(returns))  # Start near current BTC price
-        
-        # Ensure price stays in realistic range
-        price = np.clip(price, 70000, 95000)
+        # Random walk for price with realistic BTC-like behavior.
+        # NOTE: Avoid hard clipping to a tight range (it can create a flat line at the boundary).
+        returns = np.random.normal(0.0001, 0.012, hours)
+        start_price = 86000
+        price = start_price * np.exp(np.cumsum(returns))
+        price = np.clip(price, 30000, 200000)
         
         df = pd.DataFrame({
             'timestamp': dates,
@@ -306,7 +406,7 @@ class PriceDataCollector:
             'low': price * (1 - np.random.uniform(0, 0.015, hours)),
             'close': price,
             'volume': np.random.uniform(2e9, 8e9, hours),
-            'market_cap': price * 19.5e6  # Current BTC supply
+            'market_cap': price * 19.5e6  # Approx current BTC supply
         })
         
         df = df.set_index('timestamp')
