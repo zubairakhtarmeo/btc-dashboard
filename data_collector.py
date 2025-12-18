@@ -59,6 +59,7 @@ class CryptoDataCollector:
         self.base_url_binance = "https://api.binance.com/api/v3"
         self.base_url_coincap = "https://api.coincap.io/v2"
         self.base_url_coinbase = "https://api.coinbase.com/v2"
+        self.base_url_coinbase_exchange = "https://api.exchange.coinbase.com"
         
         self.price_collector = PriceDataCollector(self.api_keys, use_cache)
         self.news_collector = NewsDataCollector(self.api_keys, use_cache)
@@ -143,7 +144,7 @@ class CryptoDataCollector:
     def _get_binance_price(self, symbol: str) -> float:
         """Get price from Binance"""
         import requests
-        ticker = f"{symbol.upper()}USDT"
+        ticker = PriceDataCollector._to_binance_symbol_static(symbol)
         url = f"{self.base_url_binance}/ticker/price"
         response = requests.get(url, params={'symbol': ticker}, timeout=5)
         response.raise_for_status()
@@ -169,7 +170,7 @@ class CryptoDataCollector:
     def _get_coinbase_price(self, symbol: str) -> float:
         """Get price from Coinbase"""
         import requests
-        pair = f"{symbol.upper()}-USD"
+        pair = PriceDataCollector._to_coinbase_pair_static(symbol)
         url = f"{self.base_url_coinbase}/prices/{pair}/spot"
         response = requests.get(url, timeout=5)
         response.raise_for_status()
@@ -184,6 +185,47 @@ class PriceDataCollector:
         self.use_cache = use_cache
         self.base_url_coingecko = "https://api.coingecko.com/api/v3"
         self.base_url_binance = "https://api.binance.com/api/v3"
+        self.base_url_coinbase_exchange = "https://api.exchange.coinbase.com"
+
+    @staticmethod
+    def _to_binance_symbol_static(symbol: str) -> str:
+        s = (symbol or '').strip().upper()
+        if not s:
+            return 'BTCUSDT'
+        if s.endswith('USDT'):
+            return s
+        mapping = {
+            'BITCOIN': 'BTC',
+            'BTC': 'BTC',
+            'ETHEREUM': 'ETH',
+            'ETH': 'ETH',
+            'SOLANA': 'SOL',
+            'SOL': 'SOL',
+            'DOGECOIN': 'DOGE',
+            'DOGE': 'DOGE',
+            'RIPPLE': 'XRP',
+            'XRP': 'XRP',
+        }
+        base = mapping.get(s, s)
+        return f"{base}USDT"
+
+    @staticmethod
+    def _to_coinbase_pair_static(symbol: str) -> str:
+        s = (symbol or '').strip().upper()
+        mapping = {
+            'BITCOIN': 'BTC',
+            'BTC': 'BTC',
+            'ETHEREUM': 'ETH',
+            'ETH': 'ETH',
+            'SOLANA': 'SOL',
+            'SOL': 'SOL',
+            'DOGECOIN': 'DOGE',
+            'DOGE': 'DOGE',
+            'RIPPLE': 'XRP',
+            'XRP': 'XRP',
+        }
+        base = mapping.get(s, s or 'BTC')
+        return f"{base}-USD"
     
     def get_price_data(
         self,
@@ -204,7 +246,7 @@ class PriceDataCollector:
         """
         # Check cache first
         cache_key = f"price_{symbol}_{hours_back}_{interval}"
-        cached_data = self._load_from_cache(cache_key)
+        cached_data = self._load_from_cache(cache_key) if self.use_cache else None
         if cached_data is not None and self.use_cache:
             try:
                 closes = cached_data['close'] if isinstance(cached_data, pd.DataFrame) and 'close' in cached_data.columns else None
@@ -220,12 +262,30 @@ class PriceDataCollector:
                         except Exception:
                             pass
                     else:
+                        try:
+                            cached_data.attrs = dict(getattr(cached_data, 'attrs', {}) or {})
+                            cached_data.attrs.setdefault('source', 'Cache')
+                            cached_data.attrs['cache_hit'] = True
+                        except Exception:
+                            pass
                         logger.info(f"Using cached price data for {symbol}")
                         return cached_data
                 else:
+                    try:
+                        cached_data.attrs = dict(getattr(cached_data, 'attrs', {}) or {})
+                        cached_data.attrs.setdefault('source', 'Cache')
+                        cached_data.attrs['cache_hit'] = True
+                    except Exception:
+                        pass
                     logger.info(f"Using cached price data for {symbol}")
                     return cached_data
             except Exception:
+                try:
+                    cached_data.attrs = dict(getattr(cached_data, 'attrs', {}) or {})
+                    cached_data.attrs.setdefault('source', 'Cache')
+                    cached_data.attrs['cache_hit'] = True
+                except Exception:
+                    pass
                 logger.info(f"Using cached price data for {symbol}")
                 return cached_data
 
@@ -242,7 +302,7 @@ class PriceDataCollector:
 
         # Prefer Binance klines first (real OHLCV, usually reliable)
         try:
-            binance_symbol = self._to_binance_symbol(symbol)
+            binance_symbol = self._to_binance_symbol_static(symbol)
             interval_map = {'1h': '1h', '4h': '4h', '1d': '1d'}
             candle_interval = interval_map.get(interval, '1h')
 
@@ -274,6 +334,11 @@ class PriceDataCollector:
                 df = df[['open', 'high', 'low', 'close', 'volume', 'market_cap']].dropna(subset=['close'])
 
                 if not _is_flat_close(df):
+                    try:
+                        df.attrs = dict(getattr(df, 'attrs', {}) or {})
+                        df.attrs.update({'source': 'Binance', 'cache_hit': False, 'symbol': symbol, 'interval': interval})
+                    except Exception:
+                        pass
                     logger.info(f"Collected {len(df)} price records from Binance for {symbol}")
                     self._save_to_cache(cache_key, df)
                     return df
@@ -281,6 +346,59 @@ class PriceDataCollector:
                     logger.warning("Binance returned flat/invalid close series; falling back")
         except Exception as e:
             logger.warning(f"Binance API failed: {e}")
+
+        # Coinbase Exchange candles fallback (often works when Binance is blocked)
+        try:
+            if interval == '1h':
+                pair = self._to_coinbase_pair_static(symbol)
+                granularity = 3600
+                end = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+                remaining = int(hours_back)
+                rows = []
+
+                # Coinbase returns max ~300 candles per request
+                while remaining > 0 and len(rows) < 5000:
+                    batch = min(300, remaining)
+                    start = end - timedelta(hours=batch)
+                    url = f"{self.base_url_coinbase_exchange}/products/{pair}/candles"
+                    params = {
+                        'granularity': granularity,
+                        'start': start.isoformat() + 'Z',
+                        'end': end.isoformat() + 'Z',
+                    }
+                    resp = requests.get(url, params=params, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if not isinstance(data, list) or len(data) == 0:
+                        break
+
+                    # Each entry: [ time, low, high, open, close, volume ]
+                    rows.extend(data)
+                    remaining -= batch
+                    end = start
+
+                if rows:
+                    df = pd.DataFrame(rows, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['time'], unit='s', utc=True).dt.tz_convert(None)
+                    df = df.set_index('timestamp').sort_index()
+                    for c in ['open', 'high', 'low', 'close', 'volume']:
+                        df[c] = pd.to_numeric(df[c], errors='coerce')
+                    df['market_cap'] = df['close'] * 19e6
+                    df = df[['open', 'high', 'low', 'close', 'volume', 'market_cap']].dropna(subset=['close'])
+
+                    if not _is_flat_close(df):
+                        try:
+                            df.attrs = dict(getattr(df, 'attrs', {}) or {})
+                            df.attrs.update({'source': 'Coinbase Exchange', 'cache_hit': False, 'symbol': symbol, 'interval': interval})
+                        except Exception:
+                            pass
+                        logger.info(f"Collected {len(df)} price records from Coinbase Exchange for {symbol}")
+                        self._save_to_cache(cache_key, df)
+                        return df
+                    else:
+                        logger.warning("Coinbase Exchange returned flat/invalid close series; falling back")
+        except Exception as e:
+            logger.warning(f"Coinbase Exchange candles failed: {e}")
         
         # Try multiple free APIs
         try:
@@ -314,6 +432,11 @@ class PriceDataCollector:
                 logger.info(f"Collected {len(df)} price records from CoinCap for {symbol}")
 
                 if not _is_flat_close(df):
+                    try:
+                        df.attrs = dict(getattr(df, 'attrs', {}) or {})
+                        df.attrs.update({'source': 'CoinCap', 'cache_hit': False, 'symbol': symbol, 'interval': interval})
+                    except Exception:
+                        pass
                     self._save_to_cache(cache_key, df)
                     return df
                 else:
@@ -352,41 +475,34 @@ class PriceDataCollector:
             df['low'] = df['close'] * 0.995
             
             logger.info(f"Collected {len(df)} price records from CoinGecko for {symbol}")
-            
-            self._save_to_cache(cache_key, df)
-            return df
+
+            if not _is_flat_close(df):
+                try:
+                    df.attrs = dict(getattr(df, 'attrs', {}) or {})
+                    df.attrs.update({'source': 'CoinGecko', 'cache_hit': False, 'symbol': symbol, 'interval': interval})
+                except Exception:
+                    pass
+                self._save_to_cache(cache_key, df)
+                return df
+            else:
+                logger.warning("CoinGecko returned flat/invalid close series; falling back")
             
         except Exception as e:
             logger.warning(f"CoinGecko API failed: {e}")
 
         logger.error("All price APIs failed; using synthetic fallback data")
         dummy_df = self._generate_dummy_price_data(hours_back)
+        try:
+            dummy_df.attrs = dict(getattr(dummy_df, 'attrs', {}) or {})
+            dummy_df.attrs.update({'source': 'Synthetic', 'cache_hit': False, 'symbol': symbol, 'interval': interval})
+        except Exception:
+            pass
         self._save_to_cache(cache_key, dummy_df)
         return dummy_df
 
+    # Backwards-compat alias
     def _to_binance_symbol(self, symbol: str) -> str:
-        """Best-effort mapping from common ids/names to Binance tickers."""
-        s = (symbol or '').strip().upper()
-        if not s:
-            return 'BTCUSDT'
-
-        if s.endswith('USDT'):
-            return s
-
-        mapping = {
-            'BITCOIN': 'BTC',
-            'BTC': 'BTC',
-            'ETHEREUM': 'ETH',
-            'ETH': 'ETH',
-            'SOLANA': 'SOL',
-            'SOL': 'SOL',
-            'DOGECOIN': 'DOGE',
-            'DOGE': 'DOGE',
-            'RIPPLE': 'XRP',
-            'XRP': 'XRP',
-        }
-        base = mapping.get(s, s)
-        return f"{base}USDT"
+        return self._to_binance_symbol_static(symbol)
     
     def _generate_dummy_price_data(self, hours: int) -> pd.DataFrame:
         """Generate realistic synthetic price data for testing"""
