@@ -3,75 +3,60 @@ Premium Enterprise-Grade Bitcoin Forecasting Dashboard
 Bloomberg Terminal Style - AI-Powered Multi-Horizon Predictions
 """
 
-import streamlit as st
+from __future__ import annotations
+
+import json
+import pickle
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
-    # AI Predictions Section Header (essentials first)
-    st.markdown("""
-        <div class="section-header">
-            <span class="section-icon">🔮</span>
-            <span>AI Predictions</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('<div style="color: rgba(148, 163, 184, 0.95); font-size: 0.85rem; margin-bottom: 1rem;">Multi-horizon forecasts (scan first; details below)</div>', unsafe_allow_html=True)
+import plotly.graph_objects as go
+import streamlit as st
+import streamlit.components.v1 as components
+from tensorflow import keras
 
-    # Progressive disclosure: validation details in an expander
-    with st.expander("Model validation (24H predicted vs actual)", expanded=False):
-        if validation_summary_html:
-            st.markdown(validation_summary_html, unsafe_allow_html=True)
-        if not validation_chart_df.empty:
-            fig_val = go.Figure()
-            fig_val.add_trace(go.Scatter(
-                x=validation_chart_df['target_at'],
-                y=validation_chart_df['predicted'],
-                mode='lines+markers',
-                name='Predicted (24H)',
-                line=dict(color='#22c55e', width=2, dash='dash'),
-                marker=dict(size=6, color='#22c55e', line=dict(color='#0f172a', width=1)),
-                hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
-            ))
-            fig_val.add_trace(go.Scatter(
-                x=validation_chart_df['target_at'],
-                y=validation_chart_df['actual'],
-                mode='lines+markers',
-                name='Actual',
-                line=dict(color='#667eea', width=2),
-                marker=dict(size=6, color='#667eea', line=dict(color='#0f172a', width=1)),
-                hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
-            ))
+from data_collector import CryptoDataCollector
+from enhanced_predictor import (
+    EnhancedCryptoPricePredictor,
+    MultiHeadAttentionCustom,
+    TemporalConvLayer,
+)
 
-            fig_val.update_layout(
-                title=dict(
-                    text='24H Validation: Predicted vs Actual',
-                    font=dict(size=14, color='#f1f5f9', weight=600)
-                ),
-                xaxis_title='Target Time (UTC)',
-                yaxis_title='Price (USD)',
-                hovermode='x unified',
-                height=260,
-                template='plotly_dark',
-                paper_bgcolor='rgba(30, 41, 59, 0.35)',
-                plot_bgcolor='rgba(30, 41, 59, 0.35)',
-                font=dict(size=11, color='#94a3b8'),
-                margin=dict(t=50, b=40, l=40, r=40),
-                legend=dict(
-                    orientation='h',
-                    yanchor='bottom',
-                    y=1.02,
-                    xanchor='right',
-                    x=1,
-                    bgcolor='rgba(30, 41, 59, 0.8)',
-                    bordercolor='rgba(148, 163, 184, 0.2)',
-                    borderwidth=1
-                )
-            )
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / 'models' / 'bitcoin_real_simplified_model.h5'
+METADATA_PATH = BASE_DIR / 'models' / 'bitcoin_real_simplified_metadata.pkl'
+VALIDATION_24H_PATH = BASE_DIR / 'cache' / 'validation_24h.json'
+PREDICTION_LOG_PATH = BASE_DIR / 'cache' / 'prediction_log.json'
 
-            st.plotly_chart(fig_val, use_container_width=True)
-                out.index = pd.to_datetime(out.index, unit=unit, utc=True, errors="coerce")
+
+def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure df has a UTC DatetimeIndex; never raises."""
+    try:
+        if df is None or len(df) == 0:
+            return df
+
+        out = df.copy()
+
+        if isinstance(out.index, pd.DatetimeIndex):
+            out.index = pd.to_datetime(out.index, utc=True, errors='coerce')
+        elif 'timestamp' in out.columns:
+            ts = out['timestamp']
+            unit = None
+            try:
+                if np.issubdtype(ts.dtype, np.number):
+                    median = float(np.nanmedian(ts.astype(float)))
+                    unit = 'ms' if median > 1e11 else 's'
+            except Exception:
+                unit = None
+
+            if unit:
+                out.index = pd.to_datetime(ts, unit=unit, utc=True, errors='coerce')
             else:
-                out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+                out.index = pd.to_datetime(ts, utc=True, errors='coerce')
         else:
-            out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+            out.index = pd.to_datetime(out.index, utc=True, errors='coerce')
 
         out = out[~out.index.isna()]
         return out
@@ -1411,7 +1396,7 @@ def main():
     </div>
     <!-- TradingView Widget END -->
     """
-                components.html(tradingview_html, height=520)
+        components.html(tradingview_html, height=520)
     
     st.markdown('<div style="margin: 1rem 0 1rem 0;"><div class="section-header" style="margin: 0;"><span class="section-icon">📈</span><span>AI Model Analytics</span></div></div>', unsafe_allow_html=True)
     
