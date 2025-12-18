@@ -756,7 +756,15 @@ def fetch_live_data():
     try:
         current_price = collector.get_current_price('bitcoin')
         price_data = collector.price_collector.get_price_data('bitcoin', hours_back=2000, interval='1h')
-        price_data.iloc[-1, price_data.columns.get_loc('close')] = current_price
+
+        # Only blend live price into the last candle if it's close to the historical last close.
+        # This prevents a confusing vertical "cliff" when the historical series is stale/flat.
+        try:
+            last_close = float(price_data['close'].iloc[-1])
+            if last_close > 0 and abs(float(current_price) - last_close) / last_close <= 0.01:
+                price_data.iloc[-1, price_data.columns.get_loc('close')] = current_price
+        except Exception:
+            pass
         
         return current_price, price_data, None
     except Exception as e:
@@ -779,17 +787,23 @@ def generate_predictions(predictor, metadata, features_df):
     return predictions
 
 
-def _format_price_data_diagnostics(price_data: pd.DataFrame) -> str:
+def _format_price_data_diagnostics(price_data: pd.DataFrame, current_price: float | None = None) -> str:
     try:
         if price_data is None or not isinstance(price_data, pd.DataFrame) or len(price_data) == 0:
             return "No price_data"
 
-        df = _ensure_datetime_index(price_data).sort_index()
+        # Read attrs from the original frame first (index conversions/copies can drop attrs)
         source = None
+        cache_hit = None
         try:
-            source = (getattr(df, 'attrs', {}) or {}).get('source')
+            original_attrs = dict(getattr(price_data, 'attrs', {}) or {})
+            source = original_attrs.get('source')
+            cache_hit = original_attrs.get('cache_hit')
         except Exception:
             source = None
+            cache_hit = None
+
+        df = _ensure_datetime_index(price_data).sort_index()
 
         if 'close' not in df.columns:
             return f"source={source or 'unknown'} • missing close"
@@ -806,11 +820,11 @@ def _format_price_data_diagnostics(price_data: pd.DataFrame) -> str:
         first_ts = df.index.min() if isinstance(df.index, pd.DatetimeIndex) else None
         last_ts = df.index.max() if isinstance(df.index, pd.DatetimeIndex) else None
 
-        cache_hit = None
-        try:
-            cache_hit = (getattr(df, 'attrs', {}) or {}).get('cache_hit')
-        except Exception:
-            cache_hit = None
+        last_close = float(close.iloc[-1]) if len(close) else None
+        delta_str = ""
+        if current_price is not None and last_close is not None and last_close != 0:
+            pct = (float(current_price) - last_close) / last_close * 100.0
+            delta_str = f" • last_close=${last_close:,.2f} • live=${float(current_price):,.2f} • live_vs_last={pct:+.2f}%"
 
         return (
             f"source={source or 'unknown'}"
@@ -822,6 +836,7 @@ def _format_price_data_diagnostics(price_data: pd.DataFrame) -> str:
             f" • close_max=${float(window.max()):,.2f}"
             f" • first={first_ts}"
             f" • last={last_ts}"
+            f"{delta_str}"
         )
     except Exception as e:
         return f"diagnostics_failed={e}"
@@ -1471,7 +1486,7 @@ def main():
 
         st.plotly_chart(fig_historical, use_container_width=True)
         with st.expander("Data diagnostics", expanded=False):
-            st.caption(_format_price_data_diagnostics(price_data))
+            st.caption(_format_price_data_diagnostics(price_data, current_price=current_price))
         st.caption("Prediction history is being recorded from now. In ~7–8 days we can enable a second line using real stored predictions vs actual.")
     else:
         st.info("Not enough data to render the last-7-days chart yet.")
