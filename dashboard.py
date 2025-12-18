@@ -1092,24 +1092,20 @@ def main():
     change_symbol = "▲" if change_24h >= 0 else "▼"
 
     st.markdown(
-        f"""
-        <div class="price-panel">
-            <div class="price-meta left">
-                <div class="meta-label">Change (24H)</div>
-                <div class="meta-value {change_class}">{change_symbol} {abs(change_24h):.2f}%</div>
-            </div>
-
-            <div class="price-center">
-                <div class="price-center-label">BTC Price</div>
-                <div class="price-center-value">${current_price:,.2f}</div>
-            </div>
-
-            <div class="price-meta right">
-                <div class="meta-label">Interval</div>
-                <div class="meta-value">1H candles</div>
-            </div>
-        </div>
-        """,
+                f"""<div class="price-panel">
+<div class="price-meta left">
+    <div class="meta-label">Change (24H)</div>
+    <div class="meta-value {change_class}">{change_symbol} {abs(change_24h):.2f}%</div>
+</div>
+<div class="price-center">
+    <div class="price-center-label">BTC Price</div>
+    <div class="price-center-value">${current_price:,.2f}</div>
+</div>
+<div class="price-meta right">
+    <div class="meta-label">Interval</div>
+    <div class="meta-value">1H candles</div>
+</div>
+</div>""",
         unsafe_allow_html=True,
     )
     
