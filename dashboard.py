@@ -267,11 +267,69 @@ st.markdown("""
     * {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
+
+    /* Theme variables (LIGHT default; DARK override below)
+       Streamlit can be toggled light/dark; avoid hard-coded dark UI so both stay readable. */
+    :root {
+        --dsba-bg-0: linear-gradient(135deg, #f7f8fc 0%, #eef2ff 100%);
+        --dsba-surface-0: rgba(255, 255, 255, 0.92);
+        --dsba-surface-1: rgba(255, 255, 255, 0.72);
+        --dsba-border: rgba(15, 23, 42, 0.12);
+        --dsba-text: rgba(15, 23, 42, 0.96);
+        --dsba-text-2: rgba(15, 23, 42, 0.72);
+        --dsba-text-3: rgba(15, 23, 42, 0.58);
+        --dsba-pill-bg: rgba(255, 255, 255, 0.65);
+        --dsba-shadow: 0 2px 10px rgba(2, 6, 23, 0.10);
+        --dsba-shadow-hover: 0 8px 22px rgba(2, 6, 23, 0.12);
+        --dsba-accent: #667eea;
+        --dsba-accent-2: #764ba2;
+        --dsba-positive: #16a34a;
+        --dsba-negative: #dc2626;
+        --dsba-warning: #d97706;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --dsba-bg-0: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            --dsba-surface-0: rgba(30, 41, 59, 0.70);
+            --dsba-surface-1: rgba(15, 23, 42, 0.35);
+            --dsba-border: rgba(148, 163, 184, 0.16);
+            --dsba-text: rgba(241, 245, 249, 0.98);
+            --dsba-text-2: rgba(226, 232, 240, 0.92);
+            --dsba-text-3: rgba(148, 163, 184, 0.95);
+            --dsba-pill-bg: rgba(15, 23, 42, 0.35);
+            --dsba-shadow: 0 2px 10px rgba(0, 0, 0, 0.20);
+            --dsba-shadow-hover: 0 8px 22px rgba(99, 102, 241, 0.18);
+            --dsba-positive: #22c55e;
+            --dsba-negative: #ef4444;
+            --dsba-warning: #fbbf24;
+        }
+    }
+
+    /* Best-effort hook if Streamlit sets a theme attribute */
+    html[data-theme="dark"], body[data-theme="dark"], [data-theme="dark"] {
+        --dsba-bg-0: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+        --dsba-surface-0: rgba(30, 41, 59, 0.70);
+        --dsba-surface-1: rgba(15, 23, 42, 0.35);
+        --dsba-border: rgba(148, 163, 184, 0.16);
+        --dsba-text: rgba(241, 245, 249, 0.98);
+        --dsba-text-2: rgba(226, 232, 240, 0.92);
+        --dsba-text-3: rgba(148, 163, 184, 0.95);
+        --dsba-pill-bg: rgba(15, 23, 42, 0.35);
+        --dsba-shadow: 0 2px 10px rgba(0, 0, 0, 0.20);
+        --dsba-shadow-hover: 0 8px 22px rgba(99, 102, 241, 0.18);
+        --dsba-positive: #22c55e;
+        --dsba-negative: #ef4444;
+        --dsba-warning: #fbbf24;
+    }
     
-    /* Dark Theme Base */
+    /* App background (robust across Streamlit versions) */
     .main {
-        background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+        background: var(--dsba-bg-0);
         padding: 0;
+    }
+    [data-testid="stAppViewContainer"] {
+        background: var(--dsba-bg-0);
     }
     
     .block-container {
@@ -286,8 +344,8 @@ st.markdown("""
     
     /* Thin Top Status Strip */
     .status-strip {
-        background: linear-gradient(90deg, rgba(30, 33, 57, 0.92) 0%, rgba(45, 50, 80, 0.92) 100%);
-        border-bottom: 1px solid rgba(99, 102, 241, 0.18);
+        background: linear-gradient(90deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%);
+        border-bottom: 1px solid rgba(102, 126, 234, 0.22);
         padding: 0.45rem 1.25rem;
         margin: -0.75rem -1.25rem 0.75rem -1.25rem;
         display: flex;
@@ -314,7 +372,7 @@ st.markdown("""
     }
 
     .status-center {
-        color: rgba(226, 232, 240, 0.92);
+        color: var(--dsba-text-2);
         font-size: 0.85rem;
         font-weight: 600;
         text-align: center;
@@ -330,7 +388,7 @@ st.markdown("""
         justify-content: flex-end;
         gap: 0.75rem;
         min-width: 280px;
-        color: rgba(148, 163, 184, 0.95);
+        color: var(--dsba-text-3);
         font-size: 0.72rem;
         font-weight: 600;
         letter-spacing: 0.4px;
@@ -343,8 +401,8 @@ st.markdown("""
         gap: 0.4rem;
         padding: 0.25rem 0.6rem;
         border-radius: 999px;
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        background: rgba(15, 23, 42, 0.35);
+        border: 1px solid var(--dsba-border);
+        background: var(--dsba-pill-bg);
     }
 
     .status-dot {
@@ -360,11 +418,11 @@ st.markdown("""
         max-width: 1040px;
         width: 100%;
         margin: 0.35rem auto 0.85rem auto;
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.70) 0%, rgba(51, 65, 85, 0.70) 100%);
-        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: linear-gradient(135deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%);
+        border: 1px solid var(--dsba-border);
         border-radius: 14px;
         padding: 0.65rem 0.9rem;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.20);
+        box-shadow: var(--dsba-shadow);
         display: grid;
         grid-template-columns: 1fr auto 1fr;
         align-items: center;
@@ -382,7 +440,7 @@ st.markdown("""
     .price-meta.right { text-align: right; }
 
     .meta-label {
-        color: rgba(148, 163, 184, 0.95);
+        color: var(--dsba-text-3);
         font-size: 0.68rem;
         font-weight: 700;
         text-transform: uppercase;
@@ -391,7 +449,7 @@ st.markdown("""
     }
 
     .meta-value {
-        color: rgba(226, 232, 240, 0.92);
+        color: var(--dsba-text);
         font-size: 0.9rem;
         font-weight: 700;
         line-height: 1.2;
@@ -400,8 +458,8 @@ st.markdown("""
         text-overflow: ellipsis;
     }
 
-    .meta-value.positive { color: #22c55e; }
-    .meta-value.negative { color: #ef4444; }
+    .meta-value.positive { color: var(--dsba-positive); }
+    .meta-value.negative { color: var(--dsba-negative); }
 
     .price-center {
         display: flex;
@@ -413,7 +471,7 @@ st.markdown("""
     }
 
     .price-center-label {
-        color: rgba(148, 163, 184, 0.95);
+        color: var(--dsba-text-3);
         font-size: 0.68rem;
         font-weight: 700;
         text-transform: uppercase;
@@ -422,7 +480,7 @@ st.markdown("""
     }
 
     .price-center-value {
-        color: #f1f5f9;
+        color: var(--dsba-text);
         font-size: 2.35rem;
         font-weight: 900;
         letter-spacing: -0.8px;
@@ -436,7 +494,7 @@ st.markdown("""
     }
     
     .price-label {
-        color: #94a3b8;
+        color: var(--dsba-text-3);
         font-size: 0.85rem;
         font-weight: 500;
         text-transform: uppercase;
@@ -445,12 +503,12 @@ st.markdown("""
     }
     
     .price-value {
-        color: #f1f5f9;
+        color: var(--dsba-text);
         font-size: 3.5rem;
         font-weight: 700;
         letter-spacing: -1px;
         margin: 0.5rem 0;
-        text-shadow: 0 1px 6px rgba(99, 102, 241, 0.18);
+        text-shadow: none;
     }
     
     .price-change {
@@ -463,25 +521,25 @@ st.markdown("""
     }
     
     .price-change.positive {
-        background: rgba(34, 197, 94, 0.15);
-        color: #22c55e;
-        border: 1px solid rgba(34, 197, 94, 0.3);
+        background: rgba(22, 163, 74, 0.12);
+        color: var(--dsba-positive);
+        border: 1px solid rgba(22, 163, 74, 0.20);
     }
     
     .price-change.negative {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
-        border: 1px solid rgba(239, 68, 68, 0.3);
+        background: rgba(220, 38, 38, 0.10);
+        color: var(--dsba-negative);
+        border: 1px solid rgba(220, 38, 38, 0.20);
     }
     
     /* Premium KPI Cards */
     .kpi-card {
-        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-        border: 1px solid rgba(148, 163, 184, 0.1);
+        background: linear-gradient(135deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%);
+        border: 1px solid var(--dsba-border);
         border-radius: 12px;
         padding: 1.5rem;
         margin: 0.5rem 0;
-        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+        box-shadow: var(--dsba-shadow);
         transition: all 0.2s ease;
         height: 100%;
         position: relative;
@@ -490,8 +548,8 @@ st.markdown("""
     
     .kpi-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 8px 22px rgba(99, 102, 241, 0.18);
-        border-color: rgba(99, 102, 241, 0.35);
+        box-shadow: var(--dsba-shadow-hover);
+        border-color: rgba(102, 126, 234, 0.28);
     }
     
     .kpi-header {
@@ -500,11 +558,11 @@ st.markdown("""
         justify-content: space-between;
         margin-bottom: 1rem;
         padding-bottom: 0.75rem;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        border-bottom: 1px solid var(--dsba-border);
     }
     
     .kpi-time {
-        color: #94a3b8;
+        color: var(--dsba-text-3);
         font-size: 0.75rem;
         font-weight: 600;
         text-transform: uppercase;
@@ -517,7 +575,7 @@ st.markdown("""
     }
     
     .kpi-price {
-        color: #f1f5f9;
+        color: var(--dsba-text);
         font-size: 1.8rem;
         font-weight: 700;
         margin: 0.75rem 0;
@@ -531,11 +589,11 @@ st.markdown("""
     }
     
     .kpi-change.up {
-        color: #22c55e;
+        color: var(--dsba-positive);
     }
     
     .kpi-change.down {
-        color: #ef4444;
+        color: var(--dsba-negative);
     }
     
     /* Confidence Gauge */
@@ -544,7 +602,7 @@ st.markdown("""
     }
     
     .confidence-label {
-        color: #94a3b8;
+        color: var(--dsba-text-3);
         font-size: 0.7rem;
         font-weight: 500;
         text-transform: uppercase;
@@ -554,7 +612,7 @@ st.markdown("""
     
     .confidence-bar {
         height: 6px;
-        background: rgba(148, 163, 184, 0.1);
+        background: rgba(15, 23, 42, 0.10);
         border-radius: 10px;
         overflow: hidden;
         position: relative;
@@ -564,12 +622,12 @@ st.markdown("""
         height: 100%;
         border-radius: 10px;
         transition: width 0.6s ease;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(90deg, var(--dsba-accent) 0%, var(--dsba-accent-2) 100%);
         box-shadow: none;
     }
     
     .confidence-value {
-        color: #e2e8f0;
+        color: var(--dsba-text-2);
         font-size: 0.75rem;
         font-weight: 600;
         margin-top: 0.3rem;
@@ -589,30 +647,30 @@ st.markdown("""
     
     .signal-buy {
         background: rgba(34, 197, 94, 0.15);
-        color: #22c55e;
+        color: var(--dsba-positive);
         border: 1px solid rgba(34, 197, 94, 0.3);
     }
     
     .signal-sell {
         background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
+        color: var(--dsba-negative);
         border: 1px solid rgba(239, 68, 68, 0.3);
     }
     
     .signal-hold {
         background: rgba(251, 191, 36, 0.15);
-        color: #fbbf24;
+        color: var(--dsba-warning);
         border: 1px solid rgba(251, 191, 36, 0.3);
     }
     
     /* Section Headers */
     .section-header {
-        color: #f1f5f9;
+        color: var(--dsba-text);
         font-size: 1.5rem;
         font-weight: 700;
         margin: 1.6rem 0 1rem 0;
         padding-bottom: 1rem;
-        border-bottom: 2px solid rgba(99, 102, 241, 0.3);
+        border-bottom: 2px solid rgba(102, 126, 234, 0.25);
         display: flex;
         align-items: center;
         gap: 0.75rem;
@@ -625,12 +683,12 @@ st.markdown("""
     
     /* Chart Container */
     .chart-container {
-        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-        border: 1px solid rgba(148, 163, 184, 0.1);
+        background: linear-gradient(135deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%);
+        border: 1px solid var(--dsba-border);
         border-radius: 12px;
         padding: 1.5rem;
         margin: 1rem 0;
-        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+        box-shadow: var(--dsba-shadow);
     }
     
     /* Metrics Grid */
@@ -643,16 +701,16 @@ st.markdown("""
     
     /* Metric Card */
     .metric-card {
-        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-        border: 1px solid rgba(148, 163, 184, 0.1);
+        background: linear-gradient(135deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%);
+        border: 1px solid var(--dsba-border);
         border-radius: 12px;
         padding: 1.25rem;
         text-align: center;
-        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+        box-shadow: var(--dsba-shadow);
     }
     
     .metric-label {
-        color: #94a3b8;
+        color: var(--dsba-text-3);
         font-size: 0.75rem;
         font-weight: 500;
         text-transform: uppercase;
@@ -661,22 +719,22 @@ st.markdown("""
     }
     
     .metric-value {
-        color: #f1f5f9;
+        color: var(--dsba-text);
         font-size: 1.5rem;
         font-weight: 700;
     }
     
     /* Streamlit Metric Override */
     [data-testid="stMetric"] {
-        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-        border: 1px solid rgba(148, 163, 184, 0.1);
+        background: linear-gradient(135deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%);
+        border: 1px solid var(--dsba-border);
         border-radius: 12px;
         padding: 1.25rem;
-        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
+        box-shadow: var(--dsba-shadow);
     }
     
     [data-testid="stMetric"] label {
-        color: #94a3b8 !important;
+        color: var(--dsba-text-3) !important;
         font-size: 0.75rem !important;
         font-weight: 500 !important;
         text-transform: uppercase;
@@ -684,7 +742,7 @@ st.markdown("""
     }
     
     [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: #f1f5f9 !important;
+        color: var(--dsba-text) !important;
         font-size: 1.8rem !important;
         font-weight: 700 !important;
     }
