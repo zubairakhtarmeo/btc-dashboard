@@ -748,10 +748,9 @@ def load_model_and_predictor():
 @st.cache_data(ttl=60)  # Cache for 60 seconds
 def fetch_live_data():
     """Fetch live Bitcoin price and historical data"""
-    # Streamlit Cloud can retain stale disk cache across redeploys.
-    # To avoid flat/incorrect historical series, disable disk caching on Cloud.
-    is_cloud = str(project_root).replace('\\', '/').startswith('/mount/src') or bool(os.environ.get('STREAMLIT_CLOUD'))
-    collector = CryptoDataCollector(use_cache=(not is_cloud))
+    # The dashboard already uses Streamlit in-memory caching (ttl=60).
+    # Disk caching has caused stale/flat series on Streamlit Cloud, so keep it off here.
+    collector = CryptoDataCollector(use_cache=False)
     
     try:
         current_price = collector.get_current_price('bitcoin')
@@ -1504,7 +1503,24 @@ def main():
     change_24h = ((current_price - price_24h_ago) / price_24h_ago) * 100
     
     volatility_7d = price_data['close'].tail(168).pct_change().std() * 100
-    volume_24h = price_data['volume'].tail(24).sum() if 'volume' in price_data.columns else 0
+
+    # 24H volume: most exchanges return volume in base units (e.g., BTC), not USD.
+    # Convert to USD notional when raw volume looks like base units.
+    volume_24h = 0.0
+    try:
+        if 'volume' in price_data.columns and 'close' in price_data.columns:
+            vol_24 = pd.to_numeric(price_data['volume'], errors='coerce').tail(24)
+            close_24 = pd.to_numeric(price_data['close'], errors='coerce').tail(24)
+            raw_sum = float(vol_24.sum(skipna=True))
+
+            # Heuristic: if raw sum is too small to be USD volume, treat it as base units and convert.
+            # (Typical USD 24h volume for BTC is many millions+; base-unit volume is in the thousands.)
+            if raw_sum > 0 and raw_sum < 1e7:
+                volume_24h = float((vol_24 * close_24).sum(skipna=True))
+            else:
+                volume_24h = raw_sum
+    except Exception:
+        volume_24h = 0.0
     avg_confidence = sum([card['confidence'] for card in prediction_cards]) / len(prediction_cards) * 100
     
     # Display metrics in cards
