@@ -268,8 +268,9 @@ st.markdown("""
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
-    /* Theme variables (LIGHT default; DARK override below)
-       Streamlit can be toggled light/dark; avoid hard-coded dark UI so both stay readable. */
+     /* Theme variables (LIGHT default; DARK override when Streamlit exposes a theme attribute)
+         IMPORTANT: do NOT use prefers-color-scheme here; it follows OS theme and can
+         override Streamlit's in-app toggle, causing unreadable light-mode UIs. */
     :root {
         --dsba-bg-0: linear-gradient(135deg, #f7f8fc 0%, #eef2ff 100%);
         --dsba-surface-0: rgba(255, 255, 255, 0.92);
@@ -288,26 +289,9 @@ st.markdown("""
         --dsba-warning: #d97706;
     }
 
-    @media (prefers-color-scheme: dark) {
-        :root {
-            --dsba-bg-0: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
-            --dsba-surface-0: rgba(30, 41, 59, 0.70);
-            --dsba-surface-1: rgba(15, 23, 42, 0.35);
-            --dsba-border: rgba(148, 163, 184, 0.16);
-            --dsba-text: rgba(241, 245, 249, 0.98);
-            --dsba-text-2: rgba(226, 232, 240, 0.92);
-            --dsba-text-3: rgba(148, 163, 184, 0.95);
-            --dsba-pill-bg: rgba(15, 23, 42, 0.35);
-            --dsba-shadow: 0 2px 10px rgba(0, 0, 0, 0.20);
-            --dsba-shadow-hover: 0 8px 22px rgba(99, 102, 241, 0.18);
-            --dsba-positive: #22c55e;
-            --dsba-negative: #ef4444;
-            --dsba-warning: #fbbf24;
-        }
-    }
-
-    /* Best-effort hook if Streamlit sets a theme attribute */
-    html[data-theme="dark"], body[data-theme="dark"], [data-theme="dark"] {
+    /* Best-effort hooks if Streamlit sets a theme attribute */
+    html[data-theme="dark"], body[data-theme="dark"], [data-theme="dark"],
+    [data-testid="stAppViewContainer"][data-theme="dark"] {
         --dsba-bg-0: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
         --dsba-surface-0: rgba(30, 41, 59, 0.70);
         --dsba-surface-1: rgba(15, 23, 42, 0.35);
@@ -679,6 +663,19 @@ st.markdown("""
     .section-icon {
         font-size: 1.4rem;
         opacity: 0.85;
+    }
+
+    .section-subtitle {
+        color: var(--dsba-text-2);
+        font-size: 0.85rem;
+        margin-bottom: 0.9rem;
+    }
+
+    .subsection-title {
+        color: var(--dsba-text);
+        font-size: 1.0rem;
+        font-weight: 700;
+        margin: 1.1rem 0 0.9rem 0;
     }
     
     /* Chart Container */
@@ -1121,6 +1118,17 @@ def main():
         """,
         unsafe_allow_html=True,
     )
+
+    # Theme-aware styling for Plotly + embedded widgets
+    theme_base = str(st.get_option("theme.base") or "").lower()
+    is_dark = theme_base == "dark"
+    plotly_template = "plotly_dark" if is_dark else "plotly_white"
+    plot_title_color = "#f1f5f9" if is_dark else "#0f172a"
+    plot_text_color = "#94a3b8" if is_dark else "#0f172a"
+    plot_panel_bg = "rgba(30, 41, 59, 0.50)" if is_dark else "rgba(255, 255, 255, 0.80)"
+    plot_legend_bg = "rgba(30, 41, 59, 0.80)" if is_dark else "rgba(255, 255, 255, 0.88)"
+    plot_border = "rgba(148, 163, 184, 0.20)" if is_dark else "rgba(15, 23, 42, 0.12)"
+    plot_marker_outline = "#0f172a" if not is_dark else "#f1f5f9"
     
     # Check if model exists
     if not MODEL_PATH.exists() or not METADATA_PATH.exists():
@@ -1220,7 +1228,7 @@ def main():
     )
 
     st.markdown(
-        '<div style="color: rgba(148, 163, 184, 0.92); font-size: 0.85rem; margin-bottom: 0.9rem;">Multi-horizon forecasts with confidence and direction</div>',
+        '<div class="section-subtitle">Multi-horizon forecasts with confidence and direction</div>',
         unsafe_allow_html=True,
     )
 
@@ -1237,7 +1245,7 @@ def main():
                 mode='lines+markers',
                 name='Predicted (24H)',
                 line=dict(color='#22c55e', width=2, dash='dash'),
-                marker=dict(size=7, color='#22c55e', line=dict(color='#0f172a', width=1)),
+                marker=dict(size=7, color='#22c55e', line=dict(color=plot_marker_outline, width=1)),
                 hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
             fig_val.add_trace(go.Scatter(
@@ -1246,23 +1254,23 @@ def main():
                 mode='lines+markers',
                 name='Actual',
                 line=dict(color='#667eea', width=2),
-                marker=dict(size=7, color='#667eea', line=dict(color='#0f172a', width=1)),
+                marker=dict(size=7, color='#667eea', line=dict(color=plot_marker_outline, width=1)),
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
 
             fig_val.update_layout(
                 title=dict(
                     text='24H Validation: Predicted vs Actual',
-                    font=dict(size=13, color='#f1f5f9', weight=600)
+                    font=dict(size=13, color=plot_title_color, weight=600)
                 ),
                 xaxis_title='Target Time (UTC)',
                 yaxis_title='Price (USD)',
                 hovermode='x unified',
                 height=260,
-                template='plotly_dark',
-                paper_bgcolor='rgba(30, 41, 59, 0.30)',
-                plot_bgcolor='rgba(30, 41, 59, 0.30)',
-                font=dict(size=11, color='#94a3b8'),
+                template=plotly_template,
+                paper_bgcolor=plot_panel_bg,
+                plot_bgcolor=plot_panel_bg,
+                font=dict(size=11, color=plot_text_color),
                 margin=dict(t=45, b=35, l=40, r=40),
                 legend=dict(
                     orientation='h',
@@ -1270,8 +1278,8 @@ def main():
                     y=1.02,
                     xanchor='right',
                     x=1,
-                    bgcolor='rgba(30, 41, 59, 0.75)',
-                    bordercolor='rgba(148, 163, 184, 0.2)',
+                    bgcolor=plot_legend_bg,
+                    bordercolor=plot_border,
                     borderwidth=1
                 )
             )
@@ -1281,75 +1289,44 @@ def main():
     
     
     # Premium KPI Cards - Short-term (4 cards)
-    st.markdown('<div style="color: #e2e8f0; font-size: 1.0rem; font-weight: 650; margin: 1.1rem 0 0.9rem 0;">Short-term Outlook</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subsection-title">Short-term Outlook</div>', unsafe_allow_html=True)
     cols = st.columns(4, gap="large")
     
     for i, (card, icon) in enumerate(zip(prediction_cards[:4], horizon_icons[:4])):
         with cols[i]:
             change_class = "up" if card['change_pct'] >= 0 else "down"
             change_arrow = "↑" if card['change_pct'] >= 0 else "↓"
-            change_color = "#22c55e" if card['change_pct'] >= 0 else "#ef4444"
             
             signal_class_map = {
                 'BUY': 'signal-buy',
                 'SELL': 'signal-sell',
                 'HOLD': 'signal-hold'
             }
-            
-            signal_bg_map = {
-                'BUY': 'rgba(34, 197, 94, 0.15)',
-                'SELL': 'rgba(239, 68, 68, 0.15)',
-                'HOLD': 'rgba(251, 191, 36, 0.15)'
-            }
-            
-            signal_color_map = {
-                'BUY': '#22c55e',
-                'SELL': '#ef4444',
-                'HOLD': '#fbbf24'
-            }
-            
+
             kpi_html = f"""
-            <style>
-            .kpi-card-{i} {{
-                background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-                border: 1px solid rgba(148, 163, 184, 0.1);
-                border-radius: 12px;
-                padding: 1.5rem;
-                box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
-                transition: all 0.2s ease;
-                height: 100%;
-            }}
-            .kpi-card-{i}:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 8px 22px rgba(99, 102, 241, 0.16);
-                border-color: rgba(99, 102, 241, 0.25);
-            }}
-            </style>
-            <div class="kpi-card-{i}">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid rgba(148, 163, 184, 0.1);">
-                    <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">{card['horizon']}</span>
-                    <span style="font-size: 1.2rem; opacity: 0.6;">{icon}</span>
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-time">{card['horizon']}</span>
+                    <span class="kpi-icon">{icon}</span>
                 </div>
-                <div style="color: #f1f5f9; font-size: 1.8rem; font-weight: 700; margin: 0.75rem 0; letter-spacing: -0.5px;">${card['predicted_price']:,.0f}</div>
-                <div style="font-size: 0.95rem; font-weight: 600; margin: 0.5rem 0; color: {change_color};">{change_arrow} {abs(card['change_pct']):.2f}%</div>
-                
-                <div style="margin: 1rem 0;">
-                    <div style="color: #94a3b8; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.3rem;">Confidence</div>
-                    <div style="height: 6px; background: rgba(148, 163, 184, 0.1); border-radius: 10px; overflow: hidden;">
-                        <div style="height: 100%; width: {card['confidence']*100}%; border-radius: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);"></div>
+                <div class="kpi-price">${card['predicted_price']:,.0f}</div>
+                <div class="kpi-change {change_class}">{change_arrow} {abs(card['change_pct']):.2f}%</div>
+
+                <div class="confidence-gauge">
+                    <div class="confidence-label">Confidence</div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: {card['confidence']*100:.1f}%;"></div>
                     </div>
-                    <div style="color: #e2e8f0; font-size: 0.75rem; font-weight: 600; margin-top: 0.3rem;">{card['confidence']*100:.1f}%</div>
+                    <div class="confidence-value">{card['confidence']*100:.1f}%</div>
                 </div>
-                
-                <div style="display: inline-block; padding: 0.4rem 1rem; border-radius: 20px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 0.5rem; background: {signal_bg_map[card['signal']]}; color: {signal_color_map[card['signal']]}; border: 1px solid {signal_color_map[card['signal']]};">
-                    {card['signal']}
-                </div>
+
+                <div class="signal-badge {signal_class_map[card['signal']]}">{card['signal']}</div>
             </div>
             """
-            components.html(kpi_html, height=260)
+            st.markdown(kpi_html, unsafe_allow_html=True)
     
     # Premium KPI Cards - Long-term (3 cards)
-    st.markdown('<div style="color: #e2e8f0; font-size: 1.0rem; font-weight: 650; margin: 1.5rem 0 0.9rem 0;">Long-term Outlook</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subsection-title" style="margin-top: 1.5rem;">Long-term Outlook</div>', unsafe_allow_html=True)
     cols = st.columns(3, gap="large")
     
     for i, (card, icon) in enumerate(zip(prediction_cards[4:], horizon_icons[4:])):
@@ -1357,59 +1334,33 @@ def main():
             idx = i + 4  # Continue numbering from short-term cards
             change_class = "up" if card['change_pct'] >= 0 else "down"
             change_arrow = "↑" if card['change_pct'] >= 0 else "↓"
-            change_color = "#22c55e" if card['change_pct'] >= 0 else "#ef4444"
-            
-            signal_bg_map = {
-                'BUY': 'rgba(34, 197, 94, 0.15)',
-                'SELL': 'rgba(239, 68, 68, 0.15)',
-                'HOLD': 'rgba(251, 191, 36, 0.15)'
+            signal_class_map = {
+                'BUY': 'signal-buy',
+                'SELL': 'signal-sell',
+                'HOLD': 'signal-hold'
             }
-            
-            signal_color_map = {
-                'BUY': '#22c55e',
-                'SELL': '#ef4444',
-                'HOLD': '#fbbf24'
-            }
-            
+
             kpi_html = f"""
-            <style>
-            .kpi-card-{idx} {{
-                background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-                border: 1px solid rgba(148, 163, 184, 0.1);
-                border-radius: 12px;
-                padding: 1.5rem;
-                box-shadow: 0 3px 14px rgba(0, 0, 0, 0.28);
-                transition: all 0.2s ease;
-                height: 100%;
-            }}
-            .kpi-card-{idx}:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 8px 22px rgba(99, 102, 241, 0.16);
-                border-color: rgba(99, 102, 241, 0.25);
-            }}
-            </style>
-            <div class="kpi-card-{idx}">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid rgba(148, 163, 184, 0.1);">
-                    <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">{card['horizon']}</span>
-                    <span style="font-size: 1.2rem; opacity: 0.6;">{icon}</span>
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-time">{card['horizon']}</span>
+                    <span class="kpi-icon">{icon}</span>
                 </div>
-                <div style="color: #f1f5f9; font-size: 1.8rem; font-weight: 700; margin: 0.75rem 0; letter-spacing: -0.5px;">${card['predicted_price']:,.0f}</div>
-                <div style="font-size: 0.95rem; font-weight: 600; margin: 0.5rem 0; color: {change_color};">{change_arrow} {abs(card['change_pct']):.2f}%</div>
-                
-                <div style="margin: 1rem 0;">
-                    <div style="color: #94a3b8; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.3rem;">Confidence</div>
-                    <div style="height: 6px; background: rgba(148, 163, 184, 0.1); border-radius: 10px; overflow: hidden;">
-                        <div style="height: 100%; width: {card['confidence']*100}%; border-radius: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);"></div>
+                <div class="kpi-price">${card['predicted_price']:,.0f}</div>
+                <div class="kpi-change {change_class}">{change_arrow} {abs(card['change_pct']):.2f}%</div>
+
+                <div class="confidence-gauge">
+                    <div class="confidence-label">Confidence</div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: {card['confidence']*100:.1f}%;"></div>
                     </div>
-                    <div style="color: #e2e8f0; font-size: 0.75rem; font-weight: 600; margin-top: 0.3rem;">{card['confidence']*100:.1f}%</div>
+                    <div class="confidence-value">{card['confidence']*100:.1f}%</div>
                 </div>
-                
-                <div style="display: inline-block; padding: 0.4rem 1rem; border-radius: 20px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 0.5rem; background: {signal_bg_map[card['signal']]}; color: {signal_color_map[card['signal']]}; border: 1px solid {signal_color_map[card['signal']]};">
-                    {card['signal']}
-                </div>
+
+                <div class="signal-badge {signal_class_map[card['signal']]}">{card['signal']}</div>
             </div>
             """
-            components.html(kpi_html, height=260)
+            st.markdown(kpi_html, unsafe_allow_html=True)
     
     # Charts Section
     st.markdown("""
@@ -1421,35 +1372,40 @@ def main():
     
     # TradingView Live Chart Section (progressive disclosure)
     with st.expander("Live chart (TradingView)", expanded=False):
-        st.markdown('<div style="color: #94a3b8; font-size: 0.85rem; margin: 0.25rem 0 0.75rem 0;">Real-time market data with professional trading tools</div>', unsafe_allow_html=True)
+        st.markdown('<div style="color: var(--dsba-text-2); font-size: 0.85rem; margin: 0.25rem 0 0.75rem 0;">Real-time market data with professional trading tools</div>', unsafe_allow_html=True)
 
         # Embedded TradingView Widget
-        tradingview_html = """
-    <!-- TradingView Widget BEGIN -->
-    <div class="tradingview-widget-container" style="height: 500px; margin-bottom: 0;">
-      <div class="tradingview-widget-container__widget" style="height: calc(100% - 32px); width: 100%;"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-      {
-      "autosize": true,
-      "symbol": "BINANCE:BTCUSDT",
-      "interval": "60",
-      "timezone": "Etc/UTC",
-      "theme": "dark",
-      "style": "1",
-      "locale": "en",
-      "enable_publishing": false,
-      "backgroundColor": "rgba(19, 23, 34, 1)",
-      "gridColor": "rgba(42, 46, 57, 0.06)",
-      "hide_top_toolbar": false,
-      "hide_legend": false,
-      "save_image": false,
-      "calendar": false,
-      "support_host": "https://www.tradingview.com"
-      }
-      </script>
-    </div>
-    <!-- TradingView Widget END -->
-    """
+        tv_theme = "dark" if is_dark else "light"
+        tv_bg = "rgba(19, 23, 34, 1)" if is_dark else "rgba(255, 255, 255, 1)"
+        tv_grid = "rgba(42, 46, 57, 0.06)" if is_dark else "rgba(15, 23, 42, 0.08)"
+
+        tradingview_html = f"""
+        <!-- TradingView Widget BEGIN -->
+        <div class="tradingview-widget-container" style="height: 500px; margin-bottom: 0;">
+        <div class="tradingview-widget-container__widget" style="height: calc(100% - 32px); width: 100%;"></div>
+        <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+        {{
+        "autosize": true,
+        "symbol": "BINANCE:BTCUSDT",
+        "interval": "60",
+        "timezone": "Etc/UTC",
+        "theme": "{tv_theme}",
+        "style": "1",
+        "locale": "en",
+        "enable_publishing": false,
+        "backgroundColor": "{tv_bg}",
+        "gridColor": "{tv_grid}",
+        "hide_top_toolbar": false,
+        "hide_legend": false,
+        "save_image": false,
+        "calendar": false,
+        "support_host": "https://www.tradingview.com"
+        }}
+        </script>
+        </div>
+        <!-- TradingView Widget END -->
+        """
+
         components.html(tradingview_html, height=520)
     
     st.markdown('<div style="margin: 1rem 0 1rem 0;"><div class="section-header" style="margin: 0;"><span class="section-icon">📈</span><span>AI Model Analytics</span></div></div>', unsafe_allow_html=True)
@@ -1467,7 +1423,7 @@ def main():
             mode='lines+markers',
             name='Predicted Price',
             line=dict(color='#667eea', width=3),
-            marker=dict(size=10, color='#667eea', line=dict(color='#1e293b', width=2)),
+            marker=dict(size=10, color='#667eea', line=dict(color=plot_marker_outline, width=2)),
             hovertemplate='<b>%{x}</b><br>Price: $%{y:,.2f}<extra></extra>'
         ))
         
@@ -1498,16 +1454,16 @@ def main():
         fig.update_layout(
             title=dict(
                 text="Price Prediction Trajectory",
-                font=dict(size=16, color='#f1f5f9', weight=600)
+                font=dict(size=16, color=plot_title_color, weight=600)
             ),
             xaxis_title="Time Horizon",
             yaxis_title="Price (USD)",
             hovermode='x unified',
             height=400,
-            template='plotly_dark',
-            paper_bgcolor='rgba(30, 41, 59, 0.5)',
-            plot_bgcolor='rgba(30, 41, 59, 0.5)',
-            font=dict(size=11, color='#94a3b8'),
+            template=plotly_template,
+            paper_bgcolor=plot_panel_bg,
+            plot_bgcolor=plot_panel_bg,
+            font=dict(size=11, color=plot_text_color),
             margin=dict(t=60, b=40, l=40, r=40),
             legend=dict(
                 orientation="h",
@@ -1515,8 +1471,8 @@ def main():
                 y=1.02,
                 xanchor="right",
                 x=1,
-                bgcolor='rgba(30, 41, 59, 0.8)',
-                bordercolor='rgba(148, 163, 184, 0.2)',
+                bgcolor=plot_legend_bg,
+                bordercolor=plot_border,
                 borderwidth=1
             )
         )
@@ -1534,26 +1490,26 @@ def main():
             y=[card['confidence'] * 100 for card in prediction_cards],
             marker=dict(
                 color=colors,
-                line=dict(color='#1e293b', width=1.5)
+                line=dict(color=plot_marker_outline, width=1.5)
             ),
             text=[f"{card['confidence']*100:.1f}%" for card in prediction_cards],
             textposition='outside',
-            textfont=dict(size=11, color='#f1f5f9', weight='bold'),
+            textfont=dict(size=11, color=plot_title_color, weight='bold'),
             hovertemplate='<b>%{x}</b><br>Confidence: %{y:.1f}%<extra></extra>'
         ))
         
         fig_conf.update_layout(
             title=dict(
                 text="AI Confidence Levels",
-                font=dict(size=16, color='#f1f5f9', weight=600)
+                font=dict(size=16, color=plot_title_color, weight=600)
             ),
             xaxis_title="Time Horizon",
             yaxis_title="Confidence (%)",
             height=400,
-            template='plotly_dark',
-            paper_bgcolor='rgba(30, 41, 59, 0.5)',
-            plot_bgcolor='rgba(30, 41, 59, 0.5)',
-            font=dict(size=11, color='#94a3b8'),
+            template=plotly_template,
+            paper_bgcolor=plot_panel_bg,
+            plot_bgcolor=plot_panel_bg,
+            font=dict(size=11, color=plot_text_color),
             yaxis=dict(range=[0, 100]),
             margin=dict(t=60, b=40, l=40, r=40),
             showlegend=False
@@ -1580,16 +1536,16 @@ def main():
         fig_historical.update_layout(
             title=dict(
                 text='BTC Price (Last 7 Days)',
-                font=dict(size=16, color='#f1f5f9', weight=600)
+                font=dict(size=16, color=plot_title_color, weight=600)
             ),
             xaxis_title='Date',
             yaxis_title='Price (USD)',
             hovermode='x unified',
             height=350,
-            template='plotly_dark',
-            paper_bgcolor='rgba(30, 41, 59, 0.5)',
-            plot_bgcolor='rgba(30, 41, 59, 0.5)',
-            font=dict(size=11, color='#94a3b8'),
+            template=plotly_template,
+            paper_bgcolor=plot_panel_bg,
+            plot_bgcolor=plot_panel_bg,
+            font=dict(size=11, color=plot_text_color),
             yaxis=dict(range=[y_min, y_max]),
             margin=dict(t=60, b=40, l=40, r=40),
             legend=dict(
@@ -1598,8 +1554,8 @@ def main():
                 y=1.02,
                 xanchor='right',
                 x=1,
-                bgcolor='rgba(30, 41, 59, 0.8)',
-                bordercolor='rgba(148, 163, 184, 0.2)',
+                bgcolor=plot_legend_bg,
+                bordercolor=plot_border,
                 borderwidth=1
             )
         )
