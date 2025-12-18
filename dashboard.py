@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import pickle
+import textwrap
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +23,13 @@ from enhanced_predictor import (
     EnhancedCryptoPricePredictor,
     MultiHeadAttentionCustom,
     TemporalConvLayer,
+)
+
+# Page config: keep sidebar toggle available and sidebar discoverable by default
+st.set_page_config(
+    page_title="BTC Intelligence",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -324,7 +332,16 @@ st.markdown("""
     /* Hide Streamlit Branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* Keep header visible so the sidebar hamburger/toggle remains accessible */
+    header {visibility: visible;}
+    header[data-testid="stHeader"] {
+        background: transparent;
+        box-shadow: none;
+    }
+    /* Hide Streamlit's right-side toolbar bits; keep only the sidebar toggle */
+    [data-testid="stToolbar"] {visibility: hidden;}
+    [data-testid="stDecoration"] {visibility: hidden;}
+    [data-testid="stSidebarCollapseButton"] {visibility: visible;}
     
     /* Thin Top Status Strip */
     .status-strip {
@@ -1098,6 +1115,19 @@ def create_prediction_card(horizon, label, current_price, pred_price, pred_std, 
         'signal_color': signal_color
     }
 
+
+def _render_html_block(html: str) -> None:
+    """Render HTML reliably across Streamlit versions."""
+    if not html:
+        return
+    html = str(html)
+    if hasattr(st, "html"):
+        # Newer Streamlit versions provide st.html which renders HTML directly.
+        st.html(html)
+    else:
+        # Fallback for older versions.
+        st.markdown(html, unsafe_allow_html=True)
+
 def main():
     # Thin status strip (essentials first)
     st.markdown(
@@ -1129,6 +1159,70 @@ def main():
     plot_legend_bg = "rgba(30, 41, 59, 0.80)" if is_dark else "rgba(255, 255, 255, 0.88)"
     plot_border = "rgba(148, 163, 184, 0.20)" if is_dark else "rgba(15, 23, 42, 0.12)"
     plot_marker_outline = "#0f172a" if not is_dark else "#f1f5f9"
+
+    # Top-left Menu (☰): replaces sidebar controls so it's always discoverable.
+    # Use Streamlit popover when available; fall back to an expander.
+    if "menu_open" not in st.session_state:
+        st.session_state.menu_open = False
+
+    menu_row = st.columns([1, 10])
+    with menu_row[0]:
+        if hasattr(st, "popover"):
+            with st.popover("☰"):
+                st.markdown("### ⚙️ Controls")
+                if st.button("🔄 Refresh Dashboard", use_container_width=True, key="menu_refresh"):
+                    st.cache_data.clear()
+                    st.rerun()
+
+                auto_refresh = st.checkbox("Auto-refresh (60s)", key="menu_auto_refresh")
+                if auto_refresh:
+                    import time
+
+                    time.sleep(60)
+                    st.rerun()
+
+                st.markdown("---")
+                st.markdown("### 📊 Dashboard Info")
+                st.info(
+                    """
+                    **Features:**
+                    - Real-time BTC price
+                    - 7 prediction horizons
+                    - AI confidence metrics
+                    - Buy/Sell/Hold signals
+                    - Historical analysis
+                    """
+                )
+        else:
+            if st.button("☰", help="Open menu", key="menu_toggle"):
+                st.session_state.menu_open = not st.session_state.menu_open
+
+    if not hasattr(st, "popover"):
+        with st.expander("Menu", expanded=bool(st.session_state.menu_open)):
+            st.markdown("### ⚙️ Controls")
+            if st.button("🔄 Refresh Dashboard", use_container_width=True, key="menu_refresh_fallback"):
+                st.cache_data.clear()
+                st.rerun()
+
+            auto_refresh = st.checkbox("Auto-refresh (60s)", key="menu_auto_refresh_fallback")
+            if auto_refresh:
+                import time
+
+                time.sleep(60)
+                st.rerun()
+
+            st.markdown("---")
+            st.markdown("### 📊 Dashboard Info")
+            st.info(
+                """
+                **Features:**
+                - Real-time BTC price
+                - 7 prediction horizons
+                - AI confidence metrics
+                - Buy/Sell/Hold signals
+                - Historical analysis
+                """
+            )
     
     # Check if model exists
     if not MODEL_PATH.exists() or not METADATA_PATH.exists():
@@ -1303,7 +1397,7 @@ def main():
                 'HOLD': 'signal-hold'
             }
 
-            kpi_html = f"""
+            kpi_html = textwrap.dedent(f"""\
             <div class="kpi-card">
                 <div class="kpi-header">
                     <span class="kpi-time">{card['horizon']}</span>
@@ -1322,8 +1416,8 @@ def main():
 
                 <div class="signal-badge {signal_class_map[card['signal']]}">{card['signal']}</div>
             </div>
-            """
-            st.markdown(kpi_html, unsafe_allow_html=True)
+            """).strip()
+            _render_html_block(kpi_html)
     
     # Premium KPI Cards - Long-term (3 cards)
     st.markdown('<div class="subsection-title" style="margin-top: 1.5rem;">Long-term Outlook</div>', unsafe_allow_html=True)
@@ -1340,7 +1434,7 @@ def main():
                 'HOLD': 'signal-hold'
             }
 
-            kpi_html = f"""
+            kpi_html = textwrap.dedent(f"""\
             <div class="kpi-card">
                 <div class="kpi-header">
                     <span class="kpi-time">{card['horizon']}</span>
@@ -1359,8 +1453,8 @@ def main():
 
                 <div class="signal-badge {signal_class_map[card['signal']]}">{card['signal']}</div>
             </div>
-            """
-            st.markdown(kpi_html, unsafe_allow_html=True)
+            """).strip()
+            _render_html_block(kpi_html)
     
     # Charts Section
     st.markdown("""
@@ -1628,32 +1722,7 @@ def main():
         </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar Controls
-    with st.sidebar:
-        st.markdown("### ⚙️ Controls")
-        
-        if st.button("🔄 Refresh Dashboard", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-        
-        st.markdown("---")
-        
-        auto_refresh = st.checkbox("Auto-refresh (60s)")
-        if auto_refresh:
-            import time
-            time.sleep(60)
-            st.rerun()
-        
-        st.markdown("---")
-        st.markdown("### 📊 Dashboard Info")
-        st.info("""
-        **Features:**
-        - Real-time BTC price
-        - 7 prediction horizons
-        - AI confidence metrics
-        - Buy/Sell/Hold signals
-        - Historical analysis
-        """)
+    # (Sidebar intentionally unused; menu is on-page.)
 
 if __name__ == "__main__":
     main()
