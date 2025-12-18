@@ -309,7 +309,7 @@ st.markdown("""
     }
     
     .block-container {
-        padding: 1rem 2rem 2rem 2rem;
+        padding: 0.75rem 1.25rem 1.5rem 1.25rem;
         max-width: 100%;
     }
     
@@ -318,63 +318,139 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Premium Navigation Bar */
-    .nav-bar {
-        background: linear-gradient(90deg, #1e2139 0%, #2d3250 100%);
-        padding: 1rem 2rem;
-        border-bottom: 1px solid rgba(99, 102, 241, 0.2);
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+    /* Thin Top Status Strip */
+    .status-strip {
+        background: linear-gradient(90deg, rgba(30, 33, 57, 0.92) 0%, rgba(45, 50, 80, 0.92) 100%);
+        border-bottom: 1px solid rgba(99, 102, 241, 0.18);
+        padding: 0.45rem 1.25rem;
+        margin: -0.75rem -1.25rem 0.75rem -1.25rem;
         display: flex;
-        justify-content: space-between;
         align-items: center;
-        margin: -1rem -2rem 2rem -2rem;
+        justify-content: space-between;
+        gap: 0.75rem;
     }
-    
-    .nav-logo {
-        font-size: 1.5rem;
+
+    .status-left {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        min-width: 180px;
+    }
+
+    .status-brand {
+        font-size: 0.95rem;
         font-weight: 700;
+        letter-spacing: 0.2px;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        letter-spacing: -0.5px;
+        white-space: nowrap;
     }
-    
-    .nav-title {
-        color: #e2e8f0;
-        font-size: 1.1rem;
+
+    .status-center {
+        color: rgba(226, 232, 240, 0.92);
+        font-size: 0.85rem;
         font-weight: 600;
-        letter-spacing: 0.3px;
-    }
-    
-    .nav-subtitle {
-        color: #94a3b8;
-        font-size: 0.75rem;
-        font-weight: 400;
-        margin-top: -2px;
-    }
-    
-    /* Hero Price Card */
-    .hero-price-card {
-        background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(99, 102, 241, 0.3);
-        border-radius: 16px;
-        padding: 2.5rem;
-        margin: 2rem 0;
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
         text-align: center;
-        position: relative;
+        flex: 1;
+        white-space: nowrap;
         overflow: hidden;
+        text-overflow: ellipsis;
     }
-    
-    .hero-price-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, #667eea, #764ba2, transparent);
+
+    .status-right {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        min-width: 280px;
+        color: rgba(148, 163, 184, 0.95);
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        white-space: nowrap;
+    }
+
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(15, 23, 42, 0.35);
+    }
+
+    .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: #22c55e;
+        box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
+    }
+
+    /* Compact KPI Bar (Price / Change / Interval) */
+    .kpi-bar {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.75) 0%, rgba(51, 65, 85, 0.75) 100%);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        margin: 0.4rem 0 1rem 0;
+        box-shadow: 0 3px 14px rgba(0, 0, 0, 0.22);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .kpi-group {
+        display: flex;
+        align-items: baseline;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .kpi-label {
+        color: rgba(148, 163, 184, 0.95);
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .kpi-value {
+        color: #f1f5f9;
+        font-size: 1.9rem;
+        font-weight: 800;
+        letter-spacing: -0.6px;
+        line-height: 1;
+    }
+
+    .kpi-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.28rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.1px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 42, 0.30);
+        color: rgba(226, 232, 240, 0.92);
+    }
+
+    .kpi-badge.positive {
+        border-color: rgba(34, 197, 94, 0.35);
+        color: #22c55e;
+        background: rgba(34, 197, 94, 0.10);
+    }
+
+    .kpi-badge.negative {
+        border-color: rgba(239, 68, 68, 0.35);
+        color: #ef4444;
+        background: rgba(239, 68, 68, 0.10);
     }
     
     .price-label {
@@ -552,7 +628,7 @@ st.markdown("""
         color: #f1f5f9;
         font-size: 1.5rem;
         font-weight: 700;
-        margin: 3rem 0 1.75rem 0;
+        margin: 1.6rem 0 1rem 0;
         padding-bottom: 1rem;
         border-bottom: 2px solid rgba(99, 102, 241, 0.3);
         display: flex;
@@ -986,22 +1062,25 @@ def create_prediction_card(horizon, label, current_price, pred_price, pred_std, 
     }
 
 def main():
-    # Premium Navigation Bar
-    st.markdown("""
-        <div class="nav-bar">
-            <div>
-                <div class="nav-logo">₿ BTC INTELLIGENCE</div>
+    # Thin status strip (essentials first)
+    st.markdown(
+        """
+        <div class="status-strip">
+            <div class="status-left">
+                <div class="status-brand">₿ BTC INTELLIGENCE</div>
             </div>
-            <div style="text-align: center; flex: 1;">
-                <div class="nav-title">BTC Forecasting & Market Intelligence Dashboard</div>
-                <div class="nav-subtitle">AI-Powered Multi-Horizon Predictions</div>
-            </div>
-            <div style="text-align: right;">
-                <div style="color: #94a3b8; font-size: 0.75rem;">⏱ Live</div>
-                <div style="color: #e2e8f0; font-size: 0.7rem; font-weight: 500;">""" + datetime.now().strftime('%H:%M:%S') + """</div>
+            <div class="status-center">BTC Forecasting & Market Intelligence</div>
+            <div class="status-right">
+                <span class="status-pill"><span class="status-dot"></span>Live</span>
+                <span class="status-pill">UTC: """
+        + datetime.utcnow().strftime('%H:%M:%S')
+        + """</span>
+                <span class="status-pill">Accuracy: 85.3%</span>
             </div>
         </div>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
     
     # Check if model exists
     if not MODEL_PATH.exists() or not METADATA_PATH.exists():
@@ -1024,20 +1103,31 @@ def main():
         st.error(f"⚠️ Failed to fetch live data: {error}")
         st.stop()
     
-    # Hero Price Section
-    change_1min = np.random.uniform(-0.5, 0.5)  # Simulated 1-min change
-    change_class = "positive" if change_1min >= 0 else "negative"
-    change_symbol = "▲" if change_1min >= 0 else "▼"
-    
-    st.markdown(f"""
-        <div class="hero-price-card">
-            <div class="price-label">Bitcoin Price (Live)</div>
-            <div class="price-value">${current_price:,.2f}</div>
-            <div class="price-change {change_class}">
-                {change_symbol} {abs(change_1min):.2f}% (1m)
+    # Compact KPI bar (price + real 24H change + interval)
+    price_24h_ago = price_data['close'].iloc[-25] if len(price_data) >= 25 else price_data['close'].iloc[0]
+    change_24h = ((current_price - price_24h_ago) / price_24h_ago) * 100
+    change_class = "positive" if change_24h >= 0 else "negative"
+    change_symbol = "▲" if change_24h >= 0 else "▼"
+
+    st.markdown(
+        f"""
+        <div class="kpi-bar">
+            <div class="kpi-group">
+                <span class="kpi-label">BTC Price</span>
+                <span class="kpi-value">${current_price:,.2f}</span>
+            </div>
+            <div class="kpi-group">
+                <span class="kpi-label">Change</span>
+                <span class="kpi-badge {change_class}">{change_symbol} {abs(change_24h):.2f}%</span>
+            </div>
+            <div class="kpi-group">
+                <span class="kpi-label">Interval</span>
+                <span class="kpi-badge">24H</span>
             </div>
         </div>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
     
     # Generate features and predictions
     with st.spinner("🧠 Generating AI Predictions..."):
@@ -1080,90 +1170,80 @@ def main():
     if pred_24h_price is not None:
         validation_summary_html, validation_chart_df = _update_24h_validation(price_data, float(pred_24h_price))
     
-    # AI Predictions Section Header
-    st.markdown("""
-        <div class="section-header">
+    # AI Predictions Section Header (keep it above the fold)
+    st.markdown(
+        """
+        <div class="section-header" style="margin-top: 0.9rem;">
             <span class="section-icon">🔮</span>
             <span>AI Predictions</span>
         </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('<div style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 1.5rem;">Multi-horizon price forecasts powered by deep learning neural networks</div>', unsafe_allow_html=True)
-    
-    # Model Accuracy Banner - MOST IMPORTANT
-    st.markdown(f"""
-        <div style="background: rgba(34, 197, 94, 0.10);
-                    border: 1px solid rgba(34, 197, 94, 0.35);
-                    border-radius: 14px;
-                    padding: 1.25rem 1.5rem;
-                    margin: 1.5rem 0 2rem 0;
-                    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);">
-            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
-                <div>
-                    <div style="color: rgba(241, 245, 249, 0.9); font-size: 0.8rem; font-weight: 600;
-                                text-transform: uppercase; letter-spacing: 1.2px;">Model Accuracy</div>
-                    <div style="color: #f1f5f9; font-size: 2.2rem; font-weight: 800; letter-spacing: -0.6px; line-height: 1.1;">85.3%</div>
-                </div>
-                <div style="color: rgba(241, 245, 249, 0.75); font-size: 0.78rem; font-weight: 500;">
-                    Live 24H validation shown below (Predicted vs Actual)
-                </div>
-            </div>
-            {validation_summary_html}
-        </div>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # 24H Predicted vs Actual chart (only when we have completed records)
-    if not validation_chart_df.empty:
-        fig_val = go.Figure()
-        fig_val.add_trace(go.Scatter(
-            x=validation_chart_df['target_at'],
-            y=validation_chart_df['predicted'],
-            mode='lines+markers',
-            name='Predicted (24H)',
-            line=dict(color='#22c55e', width=2, dash='dash'),
-            marker=dict(size=7, color='#22c55e', line=dict(color='#0f172a', width=1)),
-            hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
-        ))
-        fig_val.add_trace(go.Scatter(
-            x=validation_chart_df['target_at'],
-            y=validation_chart_df['actual'],
-            mode='lines+markers',
-            name='Actual',
-            line=dict(color='#667eea', width=2),
-            marker=dict(size=7, color='#667eea', line=dict(color='#0f172a', width=1)),
-            hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
-        ))
+    st.markdown(
+        '<div style="color: rgba(148, 163, 184, 0.92); font-size: 0.85rem; margin-bottom: 0.9rem;">Multi-horizon forecasts with confidence and direction</div>',
+        unsafe_allow_html=True,
+    )
 
-        fig_val.update_layout(
-            title=dict(
-                text='24H Validation: Predicted vs Actual',
-                font=dict(size=14, color='#f1f5f9', weight=600)
-            ),
-            xaxis_title='Target Time (UTC)',
-            yaxis_title='Price (USD)',
-            hovermode='x unified',
-            height=280,
-            template='plotly_dark',
-            paper_bgcolor='rgba(30, 41, 59, 0.35)',
-            plot_bgcolor='rgba(30, 41, 59, 0.35)',
-            font=dict(size=11, color='#94a3b8'),
-            margin=dict(t=50, b=40, l=40, r=40),
-            legend=dict(
-                orientation='h',
-                yanchor='bottom',
-                y=1.02,
-                xanchor='right',
-                x=1,
-                bgcolor='rgba(30, 41, 59, 0.8)',
-                bordercolor='rgba(148, 163, 184, 0.2)',
-                borderwidth=1
+    # Progressive disclosure: keep validation details collapsed by default
+    with st.expander("24H Validation (Predicted vs Actual)", expanded=False):
+        if validation_summary_html:
+            st.markdown(validation_summary_html, unsafe_allow_html=True)
+
+        if not validation_chart_df.empty:
+            fig_val = go.Figure()
+            fig_val.add_trace(go.Scatter(
+                x=validation_chart_df['target_at'],
+                y=validation_chart_df['predicted'],
+                mode='lines+markers',
+                name='Predicted (24H)',
+                line=dict(color='#22c55e', width=2, dash='dash'),
+                marker=dict(size=7, color='#22c55e', line=dict(color='#0f172a', width=1)),
+                hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
+            ))
+            fig_val.add_trace(go.Scatter(
+                x=validation_chart_df['target_at'],
+                y=validation_chart_df['actual'],
+                mode='lines+markers',
+                name='Actual',
+                line=dict(color='#667eea', width=2),
+                marker=dict(size=7, color='#667eea', line=dict(color='#0f172a', width=1)),
+                hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
+            ))
+
+            fig_val.update_layout(
+                title=dict(
+                    text='24H Validation: Predicted vs Actual',
+                    font=dict(size=13, color='#f1f5f9', weight=600)
+                ),
+                xaxis_title='Target Time (UTC)',
+                yaxis_title='Price (USD)',
+                hovermode='x unified',
+                height=260,
+                template='plotly_dark',
+                paper_bgcolor='rgba(30, 41, 59, 0.30)',
+                plot_bgcolor='rgba(30, 41, 59, 0.30)',
+                font=dict(size=11, color='#94a3b8'),
+                margin=dict(t=45, b=35, l=40, r=40),
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='right',
+                    x=1,
+                    bgcolor='rgba(30, 41, 59, 0.75)',
+                    bordercolor='rgba(148, 163, 184, 0.2)',
+                    borderwidth=1
+                )
             )
-        )
 
-        st.plotly_chart(fig_val, use_container_width=True)
+            st.plotly_chart(fig_val, use_container_width=True)
+
+    
     
     # Premium KPI Cards - Short-term (4 cards)
-    st.markdown('<div style="color: #e2e8f0; font-size: 1.1rem; font-weight: 600; margin: 2rem 0 1.5rem 0;">Short-term Outlook</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color: #e2e8f0; font-size: 1.0rem; font-weight: 650; margin: 1.1rem 0 0.9rem 0;">Short-term Outlook</div>', unsafe_allow_html=True)
     cols = st.columns(4, gap="large")
     
     for i, (card, icon) in enumerate(zip(prediction_cards[:4], horizon_icons[:4])):
@@ -1228,10 +1308,10 @@ def main():
                 </div>
             </div>
             """
-            components.html(kpi_html, height=320)
+            components.html(kpi_html, height=260)
     
     # Premium KPI Cards - Long-term (3 cards)
-    st.markdown('<div style="color: #e2e8f0; font-size: 1.1rem; font-weight: 600; margin: 2.5rem 0 1.5rem 0;">Long-term Outlook</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color: #e2e8f0; font-size: 1.0rem; font-weight: 650; margin: 1.5rem 0 0.9rem 0;">Long-term Outlook</div>', unsafe_allow_html=True)
     cols = st.columns(3, gap="large")
     
     for i, (card, icon) in enumerate(zip(prediction_cards[4:], horizon_icons[4:])):
@@ -1291,7 +1371,7 @@ def main():
                 </div>
             </div>
             """
-            components.html(kpi_html, height=320)
+            components.html(kpi_html, height=260)
     
     # Charts Section
     st.markdown("""
