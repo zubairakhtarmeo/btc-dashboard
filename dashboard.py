@@ -36,29 +36,72 @@ MODELS_DIR = project_root / 'models'
 MODEL_PATH = MODELS_DIR / 'bitcoin_real_simplified_model.h5'
 METADATA_PATH = MODELS_DIR / 'bitcoin_real_simplified_metadata.pkl'
 
-# Lightweight persistence for live 24H validation (best-effort; may reset on cloud redeploy)
+# Best-effort persistence for 24H prediction validation
 VALIDATION_24H_PATH = project_root / 'cache' / 'validation_24h.json'
+
+# Best-effort persistence for storing predictions over time
+PREDICTION_LOG_PATH = project_root / 'cache' / 'prediction_log.json'
 
 
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Best-effort: ensure the dataframe index is DatetimeIndex for plotting.
+
+    Handles common cases:
+    - DatetimeIndex already
+    - timestamp/time/date/datetime column
+    - numeric epoch index (seconds/ms/us/ns)
+    """
     if isinstance(df.index, pd.DatetimeIndex):
         return df
 
+    # Prefer an explicit timestamp column if present
     for col in ("timestamp", "time", "date", "datetime"):
         if col in df.columns:
-            out = df.copy()
-            out[col] = pd.to_datetime(out[col], utc=True, errors="coerce")
-            out = out.dropna(subset=[col]).set_index(col)
-            return out
+            try:
+                out = df.copy()
+                out[col] = pd.to_datetime(out[col], utc=True, errors="coerce")
+                out = out.dropna(subset=[col]).set_index(col)
+                return out
+            except Exception:
+                pass
 
-    return df
+    # Try converting the index
+    try:
+        out = df.copy()
+        idx = out.index
+
+        # If numeric, attempt epoch unit inference
+        if pd.api.types.is_numeric_dtype(idx):
+            s = pd.Series(idx)
+            max_val = float(pd.to_numeric(s, errors="coerce").max())
+            unit = None
+            if max_val > 1e17:
+                unit = "ns"
+            elif max_val > 1e14:
+                unit = "us"
+            elif max_val > 1e11:
+                unit = "ms"
+            elif max_val > 1e9:
+                unit = "s"
+
+            if unit is not None:
+                out.index = pd.to_datetime(out.index, unit=unit, utc=True, errors="coerce")
+            else:
+                out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+        else:
+            out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+
+        out = out[~out.index.isna()]
+        return out
+    except Exception:
+        return df
 
 
 def _load_validation_records() -> list[dict]:
     try:
         if not VALIDATION_24H_PATH.exists():
             return []
-        with open(VALIDATION_24H_PATH, "r", encoding="utf-8") as f:
+        with open(VALIDATION_24H_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, list):
             return [r for r in data if isinstance(r, dict)]
@@ -70,126 +113,182 @@ def _load_validation_records() -> list[dict]:
 def _save_validation_records(records: list[dict]) -> None:
     try:
         VALIDATION_24H_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(VALIDATION_24H_PATH, "w", encoding="utf-8") as f:
+        with open(VALIDATION_24H_PATH, 'w', encoding='utf-8') as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
     except Exception:
-        # Best-effort persistence only
         return
 
 
 def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tuple[float | None, pd.Timestamp | None]:
     try:
-        df = _ensure_datetime_index(price_data)
+        df = _ensure_datetime_index(price_data).sort_index()
         if not isinstance(df.index, pd.DatetimeIndex):
             return None, None
-
-        df = df.sort_index()
-        if "close" not in df.columns or len(df) == 0:
+        if 'close' not in df.columns or len(df) == 0:
             return None, None
 
         target_ts = pd.to_datetime(target_ts, utc=True)
-        # nearest requires monotonic index
-        idx = df.index.get_indexer([target_ts], method="nearest")[0]
+        idx = df.index.get_indexer([target_ts], method='nearest')[0]
         actual_ts = df.index[idx]
-        actual_price = float(df["close"].iloc[idx])
+        actual_price = float(df['close'].iloc[idx])
         return actual_price, actual_ts
     except Exception:
         return None, None
 
 
-def _build_24h_validation_html(price_data: pd.DataFrame, pred_24h_price: float) -> str:
-    """Create/update a single 24H prediction record and return banner HTML snippet."""
-    now_utc = pd.Timestamp.utcnow().floor("H")
+def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tuple[str, pd.DataFrame]:
+    """Store current 24H prediction and, when due, fill actual price. Returns summary HTML + chart DF."""
+    now_utc = pd.Timestamp.utcnow().floor('H')
     target_utc = now_utc + pd.Timedelta(hours=24)
 
     records = _load_validation_records()
 
-    # Keep the file small
-    cutoff = now_utc - pd.Timedelta(days=14)
-    cleaned: list[dict] = []
+    # Keep last ~30 records only
+    records = sorted(records, key=lambda r: r.get('made_at', ''))[-30:]
+
+    # Create a record for this hour if missing
+    if not any(pd.to_datetime(r.get('made_at'), utc=True, errors='coerce') == now_utc for r in records):
+        records.append({
+            'made_at': now_utc.isoformat(),
+            'target_at': target_utc.isoformat(),
+            'predicted_24h': float(predicted_24h),
+            'actual_24h': None,
+            'actual_at': None
+        })
+
+    # Fill actual for any due records missing actual
     for r in records:
-        ts = pd.to_datetime(r.get("made_at"), utc=True, errors="coerce")
-        if ts is not pd.NaT and ts >= cutoff:
-            cleaned.append(r)
-    records = cleaned
-
-    # If we don't already have a record for this "made_at" hour, create one
-    if not any(pd.to_datetime(r.get("made_at"), utc=True, errors="coerce") == now_utc for r in records):
-        records.append(
-            {
-                "made_at": now_utc.isoformat(),
-                "target_at": target_utc.isoformat(),
-                "predicted_24h": float(pred_24h_price),
-                "actual_24h": None,
-                "actual_at": None,
-            }
-        )
-
-    # Prefer the newest record that is due for evaluation
-    due_record: dict | None = None
-    for r in sorted(records, key=lambda x: x.get("target_at", ""), reverse=True):
-        t = pd.to_datetime(r.get("target_at"), utc=True, errors="coerce")
-        if t is not pd.NaT and now_utc >= t:
-            due_record = r
-            break
-
-    # If due, try to fill actual
-    if due_record is not None and due_record.get("actual_24h") is None:
-        target_at = pd.to_datetime(due_record.get("target_at"), utc=True, errors="coerce")
-        actual_price, actual_ts = _nearest_close_at(price_data, target_at)
-        if actual_price is not None and actual_ts is not None:
-            due_record["actual_24h"] = float(actual_price)
-            due_record["actual_at"] = pd.to_datetime(actual_ts, utc=True).isoformat()
+        t = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
+        if t is pd.NaT:
+            continue
+        if now_utc >= t and r.get('actual_24h') is None:
+            actual_price, actual_ts = _nearest_close_at(price_data, t)
+            if actual_price is not None and actual_ts is not None:
+                r['actual_24h'] = float(actual_price)
+                r['actual_at'] = pd.to_datetime(actual_ts, utc=True).isoformat()
 
     _save_validation_records(records)
 
-    # Render banner snippet: show latest due if available, else show the latest pending
-    if due_record is not None and due_record.get("actual_24h") is not None:
-        pred = float(due_record.get("predicted_24h", 0.0))
-        act = float(due_record.get("actual_24h", 0.0))
-        err = act - pred  # user requested Actual - Predicted
-        err_pct = (abs(err) / act * 100.0) if act else 0.0
+    # Build chart DF from completed records
+    rows = []
+    for r in records:
+        act = r.get('actual_24h')
+        pred = r.get('predicted_24h')
+        target_at = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
+        if act is None or pred is None or target_at is pd.NaT:
+            continue
+        act_f = float(act)
+        pred_f = float(pred)
+        err = act_f - pred_f  # Actual - Predicted
+        err_pct = (abs(err) / act_f * 100.0) if act_f else 0.0
         acc_pct = max(0.0, 100.0 - err_pct)
-        made_at = pd.to_datetime(due_record.get("made_at"), utc=True, errors="coerce")
-        target_at = pd.to_datetime(due_record.get("target_at"), utc=True, errors="coerce")
+        rows.append({
+            'target_at': target_at,
+            'predicted': pred_f,
+            'actual': act_f,
+            'error': err,
+            'accuracy_pct': acc_pct
+        })
 
-        return (
-            f"<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.25);'>"
-            f"<div style='color: rgba(255,255,255,0.95); font-size: 0.82rem; font-weight: 700; letter-spacing: 0.6px;'>Last 24H Validation</div>"
+    df_chart = pd.DataFrame(rows).sort_values('target_at') if rows else pd.DataFrame(columns=['target_at', 'predicted', 'actual', 'error', 'accuracy_pct'])
+
+    # Summary: latest completed record if available, else pending
+    summary_html = ''
+    if not df_chart.empty:
+        last = df_chart.iloc[-1]
+        summary_html = (
+            "<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.25);'>"
+            "<div style='color: rgba(255,255,255,0.95); font-size: 0.82rem; font-weight: 700;'>Last 24H Validation</div>"
             f"<div style='color: rgba(255,255,255,0.9); font-size: 0.78rem; margin-top: 0.35rem;'>"
-            f"Predicted (24H): <b>${pred:,.0f}</b> &nbsp;•&nbsp; Actual: <b>${act:,.0f}</b> &nbsp;•&nbsp; Error (A−P): <b>{err:+,.0f}</b> &nbsp;•&nbsp; Accuracy: <b>{acc_pct:.1f}%</b>"
-            f"</div>"
-            f"<div style='color: rgba(255,255,255,0.75); font-size: 0.72rem; margin-top: 0.25rem;'>"
-            f"Predicted at {made_at.strftime('%d %b %Y %H:%M UTC') if made_at is not pd.NaT else 'N/A'} → target {target_at.strftime('%d %b %Y %H:%M UTC') if target_at is not pd.NaT else 'N/A'}"
-            f"</div>"
-            f"</div>"
+            f"Pred: <b>${last['predicted']:,.0f}</b> &nbsp;•&nbsp; Actual: <b>${last['actual']:,.0f}</b> &nbsp;•&nbsp; Error (A−P): <b>{last['error']:+,.0f}</b> &nbsp;•&nbsp; Accuracy: <b>{last['accuracy_pct']:.1f}%</b>"
+            "</div>"
+            "</div>"
+        )
+    else:
+        summary_html = (
+            "<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.25);'>"
+            "<div style='color: rgba(255,255,255,0.95); font-size: 0.82rem; font-weight: 700;'>24H Validation</div>"
+            "<div style='color: rgba(255,255,255,0.85); font-size: 0.78rem; margin-top: 0.35rem;'>"
+            "Tracking started — first comparison will appear after 24 hours."
+            "</div>"
+            "</div>"
         )
 
-    # else show latest pending record
-    pending = None
-    for r in sorted(records, key=lambda x: x.get("made_at", ""), reverse=True):
-        t = pd.to_datetime(r.get("target_at"), utc=True, errors="coerce")
-        if t is not pd.NaT and now_utc < t:
-            pending = r
-            break
+    return summary_html, df_chart
 
-    if pending is not None:
-        pred = float(pending.get("predicted_24h", 0.0))
-        made_at = pd.to_datetime(pending.get("made_at"), utc=True, errors="coerce")
-        target_at = pd.to_datetime(pending.get("target_at"), utc=True, errors="coerce")
-        return (
-            f"<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.25);'>"
-            f"<div style='color: rgba(255,255,255,0.95); font-size: 0.82rem; font-weight: 700; letter-spacing: 0.6px;'>24H Validation (Tracking)</div>"
-            f"<div style='color: rgba(255,255,255,0.9); font-size: 0.78rem; margin-top: 0.35rem;'>"
-            f"Stored 24H forecast: <b>${pred:,.0f}</b> &nbsp;•&nbsp; Will compare at {target_at.strftime('%d %b %Y %H:%M UTC') if target_at is not pd.NaT else 'N/A'}"
-            f"</div>"
-            f"<div style='color: rgba(255,255,255,0.75); font-size: 0.72rem; margin-top: 0.25rem;'>"
-            f"Predicted at {made_at.strftime('%d %b %Y %H:%M UTC') if made_at is not pd.NaT else 'N/A'}"
-            f"</div>"
-            f"</div>"
-        )
 
-    return ""
+def _load_prediction_log() -> list[dict]:
+    try:
+        if not PREDICTION_LOG_PATH.exists():
+            return []
+        with open(PREDICTION_LOG_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [r for r in data if isinstance(r, dict)]
+        return []
+    except Exception:
+        return []
+
+
+def _save_prediction_log(records: list[dict]) -> None:
+    try:
+        PREDICTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(PREDICTION_LOG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+    except Exception:
+        return
+
+
+def _append_prediction_log(prediction_cards: list[dict], current_price: float) -> None:
+    """Append current predictions to a local JSON log for future predicted-vs-actual charts."""
+    try:
+        now_utc = pd.Timestamp.utcnow().floor('H')
+        horizon_to_hours = {
+            '1H': 1,
+            '6H': 6,
+            '12H': 12,
+            '24H': 24,
+            '48H': 48,
+            '72H': 72,
+            '7D': 168,
+        }
+
+        new_records: list[dict] = []
+        for c in (prediction_cards or []):
+            label = c.get('horizon')
+            if label not in horizon_to_hours:
+                continue
+            predicted = c.get('predicted_price')
+            if predicted is None or not np.isfinite(float(predicted)):
+                continue
+            hours_ahead = horizon_to_hours[label]
+            new_records.append({
+                'created_at': now_utc.isoformat(),
+                'target_at': (now_utc + pd.Timedelta(hours=hours_ahead)).isoformat(),
+                'horizon_label': label,
+                'horizon_hours': hours_ahead,
+                'current_price': float(current_price),
+                'predicted_price': float(predicted),
+            })
+
+        if not new_records:
+            return
+
+        records = _load_prediction_log()
+
+        # De-duplicate by (created_at, horizon_hours)
+        existing = {(r.get('created_at'), r.get('horizon_hours')) for r in records}
+        for r in new_records:
+            key = (r.get('created_at'), r.get('horizon_hours'))
+            if key not in existing:
+                records.append(r)
+                existing.add(key)
+
+        # Keep the file bounded
+        records = records[-5000:]
+        _save_prediction_log(records)
+    except Exception:
+        return
 
 # Custom CSS for Premium Enterprise Design
 st.markdown("""
@@ -675,6 +774,106 @@ def generate_predictions(predictor, metadata, features_df):
     predictions = predictor.predict_with_uncertainty(X)
     return predictions
 
+
+@st.cache_data(ttl=300)
+def compute_historical_backtest(
+    _predictor,
+    _metadata,
+    price_data: pd.DataFrame,
+    horizon_hours: int = 1,
+    days: int = 30,
+) -> pd.DataFrame:
+    """Compute a rolling backtest series: predicted vs actual for past data."""
+    if _predictor is None or _metadata is None or price_data is None or len(price_data) == 0:
+        return pd.DataFrame()
+
+    # Ensure we have a clean datetime index
+    price_df = _ensure_datetime_index(price_data)
+    if not isinstance(price_df.index, pd.DatetimeIndex):
+        return pd.DataFrame()
+
+    features_df = add_simple_features(price_df)
+    if features_df.empty:
+        return pd.DataFrame()
+
+    feature_names = _metadata['feature_names']
+    features_df_clean = features_df.select_dtypes(include=[np.number])
+    features = features_df_clean[feature_names]
+
+    predictor = _predictor
+
+    feature_cols = [c for c in features.columns if c != 'close']
+    features_array = features[feature_cols].values
+    features_scaled = predictor.feature_scaler.transform(features_array)
+
+    seq_len = int(_metadata['config']['sequence_length'])
+
+    # Work on a limited window for performance
+    points_needed = int(days * 24 + seq_len + horizon_hours + 5)
+    if len(features) > points_needed:
+        start = len(features) - points_needed
+        idx = features.index[start:]
+        scaled = features_scaled[start:]
+        close_series = price_df['close'].iloc[start:]
+    else:
+        idx = features.index
+        scaled = features_scaled
+        close_series = price_df['close']
+
+    if horizon_hours not in list(getattr(predictor, 'prediction_horizons', [])):
+        return pd.DataFrame()
+
+    horizon_idx = list(predictor.prediction_horizons).index(horizon_hours)
+
+    # Build sequences and target timestamps
+    X_list = []
+    target_ts = []
+    for end in range(seq_len, len(scaled) + 1):
+        current_ts = idx[end - 1]
+        tts = current_ts + pd.Timedelta(hours=horizon_hours)
+        # Only keep if we can evaluate against an actual close later
+        X_list.append(scaled[end - seq_len:end])
+        target_ts.append(tts)
+
+    if len(X_list) == 0:
+        return pd.DataFrame()
+
+    X = np.asarray(X_list, dtype=np.float32)
+
+    # Single forward pass for speed (no MC dropout)
+    raw_pred = predictor.model.predict(X, verbose=0)
+    price_scaled = raw_pred[horizon_idx * 3]
+    price_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
+
+    pred_df = pd.DataFrame({'target_at': pd.to_datetime(target_ts), 'predicted': price_pred})
+    pred_df = pred_df.dropna(subset=['predicted']).sort_values('target_at')
+
+    # Align actual close by nearest timestamp within 90 minutes
+    actual = close_series.copy()
+    actual.index = pd.to_datetime(actual.index)
+    actual = actual.sort_index()
+
+    actual_at = []
+    for t in pred_df['target_at']:
+        # nearest index
+        try:
+            pos = actual.index.get_indexer([t], method='nearest')[0]
+            nearest_ts = actual.index[pos]
+            if abs((nearest_ts - t).total_seconds()) <= 90 * 60:
+                actual_at.append(float(actual.iloc[pos]))
+            else:
+                actual_at.append(np.nan)
+        except Exception:
+            actual_at.append(np.nan)
+
+    pred_df['actual'] = actual_at
+    pred_df = pred_df.dropna(subset=['actual'])
+
+    # Limit to last N days in the final result
+    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=days)
+    pred_df = pred_df[pred_df['target_at'] >= cutoff]
+    return pred_df
+
 def create_prediction_card(horizon, label, current_price, pred_price, pred_std, direction_prob, predictor):
     """Create a prediction card for a specific horizon"""
     # Calculate metrics
@@ -804,9 +1003,15 @@ def main():
                                      pred_std_price, direction_prob, predictor)
         prediction_cards.append(card)
 
-    # Build 24H validation snippet (best-effort persistence)
-    pred_24h = next((c["predicted_price"] for c in prediction_cards if c.get("horizon") == "24H"), None)
-    validation_24h_html = _build_24h_validation_html(price_data, float(pred_24h)) if pred_24h is not None else ""
+    # Store predictions now for future historical charts (best-effort)
+    _append_prediction_log(prediction_cards, float(current_price))
+
+    # 24H validation (Predicted vs Actual after 24H)
+    pred_24h_price = next((c['predicted_price'] for c in prediction_cards if c.get('horizon') == '24H'), None)
+    validation_summary_html = ''
+    validation_chart_df = pd.DataFrame()
+    if pred_24h_price is not None:
+        validation_summary_html, validation_chart_df = _update_24h_validation(price_data, float(pred_24h_price))
     
     # AI Predictions Section Header
     st.markdown("""
@@ -833,11 +1038,61 @@ def main():
                 <span style="font-size: 2rem; margin-left: 1rem;">✓</span>
             </div>
             <div style="color: rgba(255, 255, 255, 0.85); font-size: 0.8rem; margin-top: 0.75rem; font-weight: 500;">
-                Historical validation • Live 24H accuracy tracking below
+                Live 24H validation shown below (Predicted vs Actual)
             </div>
-            {validation_24h_html}
+            {validation_summary_html}
         </div>
     """, unsafe_allow_html=True)
+
+    # 24H Predicted vs Actual chart (only when we have completed records)
+    if not validation_chart_df.empty:
+        fig_val = go.Figure()
+        fig_val.add_trace(go.Scatter(
+            x=validation_chart_df['target_at'],
+            y=validation_chart_df['predicted'],
+            mode='lines+markers',
+            name='Predicted (24H)',
+            line=dict(color='#22c55e', width=2, dash='dash'),
+            marker=dict(size=7, color='#22c55e', line=dict(color='#0f172a', width=1)),
+            hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
+        ))
+        fig_val.add_trace(go.Scatter(
+            x=validation_chart_df['target_at'],
+            y=validation_chart_df['actual'],
+            mode='lines+markers',
+            name='Actual',
+            line=dict(color='#667eea', width=2),
+            marker=dict(size=7, color='#667eea', line=dict(color='#0f172a', width=1)),
+            hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
+        ))
+
+        fig_val.update_layout(
+            title=dict(
+                text='24H Validation: Predicted vs Actual',
+                font=dict(size=14, color='#f1f5f9', weight=600)
+            ),
+            xaxis_title='Target Time (UTC)',
+            yaxis_title='Price (USD)',
+            hovermode='x unified',
+            height=280,
+            template='plotly_dark',
+            paper_bgcolor='rgba(30, 41, 59, 0.35)',
+            plot_bgcolor='rgba(30, 41, 59, 0.35)',
+            font=dict(size=11, color='#94a3b8'),
+            margin=dict(t=50, b=40, l=40, r=40),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1,
+                bgcolor='rgba(30, 41, 59, 0.8)',
+                bordercolor='rgba(148, 163, 184, 0.2)',
+                borderwidth=1
+            )
+        )
+
+        st.plotly_chart(fig_val, use_container_width=True)
     
     # Premium KPI Cards - Short-term (4 cards)
     st.markdown('<div style="color: #e2e8f0; font-size: 1.1rem; font-weight: 600; margin: 2rem 0 1.5rem 0;">Short-term Outlook</div>', unsafe_allow_html=True)
@@ -1119,50 +1374,53 @@ def main():
         
         st.plotly_chart(fig_conf, use_container_width=True)
     
-    # Historical Price Chart (Last 7 Days)
-    recent_data = price_data.tail(168)  # Last 7 days
-    
-    fig_historical = go.Figure()
-    
-    fig_historical.add_trace(go.Scatter(
-        x=recent_data.index,
-        y=recent_data['close'],
-        mode='lines',
-        name='BTC Price',
-        line=dict(color='#667eea', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(102, 126, 234, 0.1)',
-        hovertemplate='<b>%{x}</b><br>Price: $%{y:,.2f}<extra></extra>'
-    ))
-    
-    # Add current price line
-    fig_historical.add_hline(
-        y=current_price,
-        line_dash="dash",
-        line_color="#22c55e",
-        annotation_text=f"Current: ${current_price:,.2f}",
-        annotation_position="right",
-        annotation_font=dict(size=11, color='#22c55e')
-    )
-    
-    fig_historical.update_layout(
-        title=dict(
-            text="7-Day Price History",
-            font=dict(size=16, color='#f1f5f9', weight=600)
-        ),
-        xaxis_title="Date",
-        yaxis_title="Price (USD)",
-        hovermode='x unified',
-        height=350,
-        template='plotly_dark',
-        paper_bgcolor='rgba(30, 41, 59, 0.5)',
-        plot_bgcolor='rgba(30, 41, 59, 0.5)',
-        font=dict(size=11, color='#94a3b8'),
-        margin=dict(t=60, b=40, l=40, r=40),
-        showlegend=False
-    )
-    
-    st.plotly_chart(fig_historical, use_container_width=True)
+    # Historical Price Chart (Actual only for now)
+    recent = _ensure_datetime_index(price_data).tail(168)  # last 7 days @ 1H
+    if isinstance(recent.index, pd.DatetimeIndex) and len(recent) > 0 and 'close' in recent.columns:
+        fig_historical = go.Figure()
+        fig_historical.add_trace(go.Scatter(
+            x=recent.index,
+            y=recent['close'].astype(float),
+            mode='lines',
+            name='BTC Actual Price (Last 7D)',
+            line=dict(color='#667eea', width=2),
+            hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.2f}<extra></extra>'
+        ))
+
+        y_min = float(recent['close'].min()) * 0.985
+        y_max = float(recent['close'].max()) * 1.015
+
+        fig_historical.update_layout(
+            title=dict(
+                text='BTC Price (Last 7 Days)',
+                font=dict(size=16, color='#f1f5f9', weight=600)
+            ),
+            xaxis_title='Date',
+            yaxis_title='Price (USD)',
+            hovermode='x unified',
+            height=350,
+            template='plotly_dark',
+            paper_bgcolor='rgba(30, 41, 59, 0.5)',
+            plot_bgcolor='rgba(30, 41, 59, 0.5)',
+            font=dict(size=11, color='#94a3b8'),
+            yaxis=dict(range=[y_min, y_max]),
+            margin=dict(t=60, b=40, l=40, r=40),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1,
+                bgcolor='rgba(30, 41, 59, 0.8)',
+                bordercolor='rgba(148, 163, 184, 0.2)',
+                borderwidth=1
+            )
+        )
+
+        st.plotly_chart(fig_historical, use_container_width=True)
+        st.caption("Prediction history is being recorded from now. In ~7–8 days we can enable a second line using real stored predictions vs actual.")
+    else:
+        st.info("Not enough data to render the last-7-days chart yet.")
     
     # Market Metrics Section
     st.markdown("""
