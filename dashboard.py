@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 import pickle
 import streamlit.components.v1 as components
+import os
 
 # Page configuration - MUST be first Streamlit command
 st.set_page_config(
@@ -747,7 +748,10 @@ def load_model_and_predictor():
 @st.cache_data(ttl=60)  # Cache for 60 seconds
 def fetch_live_data():
     """Fetch live Bitcoin price and historical data"""
-    collector = CryptoDataCollector(use_cache=True)
+    # Streamlit Cloud can retain stale disk cache across redeploys.
+    # To avoid flat/incorrect historical series, disable disk caching on Cloud.
+    is_cloud = str(project_root).replace('\\', '/').startswith('/mount/src') or bool(os.environ.get('STREAMLIT_CLOUD'))
+    collector = CryptoDataCollector(use_cache=(not is_cloud))
     
     try:
         current_price = collector.get_current_price('bitcoin')
@@ -773,6 +777,54 @@ def generate_predictions(predictor, metadata, features_df):
     
     predictions = predictor.predict_with_uncertainty(X)
     return predictions
+
+
+def _format_price_data_diagnostics(price_data: pd.DataFrame) -> str:
+    try:
+        if price_data is None or not isinstance(price_data, pd.DataFrame) or len(price_data) == 0:
+            return "No price_data"
+
+        df = _ensure_datetime_index(price_data).sort_index()
+        source = None
+        try:
+            source = (getattr(df, 'attrs', {}) or {}).get('source')
+        except Exception:
+            source = None
+
+        if 'close' not in df.columns:
+            return f"source={source or 'unknown'} • missing close"
+
+        close = pd.to_numeric(df['close'], errors='coerce').dropna()
+        if close.empty:
+            return f"source={source or 'unknown'} • empty close"
+
+        # Focus on the visible window for flatness detection
+        window = close.tail(168)
+        nunique = int(window.nunique(dropna=True))
+        std = float(window.std()) if len(window) > 1 else 0.0
+
+        first_ts = df.index.min() if isinstance(df.index, pd.DatetimeIndex) else None
+        last_ts = df.index.max() if isinstance(df.index, pd.DatetimeIndex) else None
+
+        cache_hit = None
+        try:
+            cache_hit = (getattr(df, 'attrs', {}) or {}).get('cache_hit')
+        except Exception:
+            cache_hit = None
+
+        return (
+            f"source={source or 'unknown'}"
+            f" • cache_hit={cache_hit if cache_hit is not None else 'unknown'}"
+            f" • points={len(df)}"
+            f" • window_unique_close={nunique}"
+            f" • window_std={std:,.6f}"
+            f" • close_min=${float(window.min()):,.2f}"
+            f" • close_max=${float(window.max()):,.2f}"
+            f" • first={first_ts}"
+            f" • last={last_ts}"
+        )
+    except Exception as e:
+        return f"diagnostics_failed={e}"
 
 
 @st.cache_data(ttl=300)
@@ -1418,6 +1470,8 @@ def main():
         )
 
         st.plotly_chart(fig_historical, use_container_width=True)
+        with st.expander("Data diagnostics", expanded=False):
+            st.caption(_format_price_data_diagnostics(price_data))
         st.caption("Prediction history is being recorded from now. In ~7–8 days we can enable a second line using real stored predictions vs actual.")
     else:
         st.info("Not enough data to render the last-7-days chart yet.")
