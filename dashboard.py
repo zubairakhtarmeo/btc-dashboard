@@ -1112,11 +1112,9 @@ def compute_historical_backtest(
         start = len(features) - points_needed
         idx = features.index[start:]
         scaled = features_scaled[start:]
-        close_series = price_df['close'].iloc[start:]
     else:
         idx = features.index
         scaled = features_scaled
-        close_series = price_df['close']
 
     if horizon_hours not in list(getattr(predictor, 'prediction_horizons', [])):
         return pd.DataFrame()
@@ -1147,8 +1145,11 @@ def compute_historical_backtest(
     pred_df = pd.DataFrame({'target_at': pd.to_datetime(target_ts, utc=True), 'predicted': price_pred})
     pred_df = pred_df.dropna(subset=['predicted']).sort_values('target_at')
 
-    # Align actual close by last known candle at-or-before target time (prevents future leakage)
-    actual = close_series.copy()
+    # Align actual close by last known candle at-or-before target time (prevents future leakage).
+    # IMPORTANT: Use the full close series (UTC-indexed) rather than a position slice.
+    # Feature engineering drops initial rows (rolling windows), so positional slicing can misalign
+    # `target_at` timestamps vs the actual series and wipe out the backtest on some hosts.
+    actual = price_df['close'].copy()
     actual.index = pd.to_datetime(actual.index, utc=True, errors='coerce')
     actual = actual[~actual.index.isna()].sort_index()
 
