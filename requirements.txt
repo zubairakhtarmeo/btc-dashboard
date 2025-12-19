@@ -9,7 +9,9 @@ scikit-learn>=1.0.0
 
 # Deep Learning
 tensorflow>=2.10.0
-keras>=2.10.0
+
+# NOTE: We use `tf.keras` (`from tensorflow import keras`) throughout.
+# Avoid installing standalone `keras` to prevent version conflicts on Streamlit Cloud.
 
 # NLP & Sentiment Analysis
 transformers>=4.20.0
@@ -46,6 +48,10 @@ openpyxl>=3.0.0
 
 # Configuration
 python-dotenv>=0.20.0
+
+# Google Sheets logging (optional)
+gspread>=6.1.0
+google-auth>=2.0.0
 
 # Testing (optional)
 pytest>=7.1.0
