@@ -1143,12 +1143,13 @@ def compute_historical_backtest(
     price_scaled = raw_pred[horizon_idx * 3]
     price_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
 
-    pred_df = pd.DataFrame({'target_at': pd.to_datetime(target_ts), 'predicted': price_pred})
+    # Ensure target_at is consistently UTC tz-aware to avoid tz-naive/aware comparison issues.
+    pred_df = pd.DataFrame({'target_at': pd.to_datetime(target_ts, utc=True), 'predicted': price_pred})
     pred_df = pred_df.dropna(subset=['predicted']).sort_values('target_at')
 
     # Align actual close by last known candle at-or-before target time (prevents future leakage)
     actual = close_series.copy()
-    actual.index = pd.to_datetime(actual.index)
+    actual.index = pd.to_datetime(actual.index, utc=True, errors='coerce')
     actual = actual.sort_index()
 
     actual_at = []
@@ -1170,7 +1171,7 @@ def compute_historical_backtest(
     pred_df = pred_df.dropna(subset=['actual'])
 
     # Limit to last N days in the final result
-    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=days)
+    cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days)
     pred_df = pred_df[pred_df['target_at'] >= cutoff]
     return pred_df
 
@@ -1378,6 +1379,7 @@ def main():
         st.stop()
 
     # Credible performance: compute a 7-day historical backtest for 24H horizon (does not depend on live logs)
+    bt24 = pd.DataFrame()
     backtest_text = "24H Backtest 7D: unavailable"
     backtest_acc = None
     backtest_n = 0
@@ -1574,13 +1576,13 @@ def main():
                 st.plotly_chart(fig_val, use_container_width=True)
 
         # 7-day rolling backtest for the 24H horizon (real historical evaluation, not live tracking)
-        if 'bt24' in locals() and isinstance(bt24, pd.DataFrame) and not bt24.empty:
-            n_bt, med_ape_bt, acc_bt = _accuracy_from_pred_actual_df(bt24)
+        st.markdown(
+            '<div class="subsection-title" style="margin-top: 1.1rem;">Backtest (Last 7 Days): 24H Rolling Predictions</div>',
+            unsafe_allow_html=True,
+        )
 
-            st.markdown(
-                '<div class="subsection-title" style="margin-top: 1.1rem;">Backtest (Last 7 Days): 24H Rolling Predictions</div>',
-                unsafe_allow_html=True,
-            )
+        if isinstance(bt24, pd.DataFrame) and not bt24.empty:
+            n_bt, med_ape_bt, acc_bt = _accuracy_from_pred_actual_df(bt24)
             st.caption(
                 f"Backtest uses historical candles to evaluate your model. Accuracy shown is 100 − Median Abs % Error. (N={n_bt})"
             )
@@ -1630,6 +1632,11 @@ def main():
                 )
             )
             st.plotly_chart(fig_bt, use_container_width=True)
+        else:
+            st.info(
+                "Backtest is temporarily unavailable. This usually resolves after a refresh once enough 1H candles load. "
+                "(It requires ~7 days of hourly candles + model sequence window.)"
+            )
 
     
     
