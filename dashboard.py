@@ -1380,6 +1380,7 @@ def main():
 
     # Credible performance: compute a 7-day historical backtest for 24H horizon (does not depend on live logs)
     bt24 = pd.DataFrame()
+    backtest_err: str | None = None
     backtest_text = "24H Backtest 7D: unavailable"
     backtest_acc = None
     backtest_n = 0
@@ -1392,10 +1393,11 @@ def main():
             backtest_text = f"24H Backtest 7D: {acc_bt:.1f}% (N={n_bt})"
         elif n_bt > 0:
             backtest_text = f"24H Backtest 7D: collecting (N={n_bt})"
-    except Exception:
+    except Exception as e:
         backtest_text = "24H Backtest 7D: unavailable"
         backtest_acc = None
         backtest_n = 0
+        backtest_err = str(e)
     
     # Compact centered price panel (contained instrument panel)
     price_24h_ago = price_data['close'].iloc[-25] if len(price_data) >= 25 else price_data['close'].iloc[0]
@@ -1637,6 +1639,31 @@ def main():
                 "Backtest is temporarily unavailable. This usually resolves after a refresh once enough 1H candles load. "
                 "(It requires ~7 days of hourly candles + model sequence window.)"
             )
+
+            # Diagnostics (best-effort) to help debug Streamlit Cloud data/provider issues.
+            try:
+                diag = _format_price_data_diagnostics(price_data, current_price)
+            except Exception:
+                diag = "diagnostics_unavailable"
+
+            try:
+                cols = list(price_data.columns) if isinstance(price_data, pd.DataFrame) else []
+            except Exception:
+                cols = []
+
+            try:
+                horizons = list(getattr(predictor, 'prediction_horizons', [])) if predictor is not None else []
+            except Exception:
+                horizons = []
+
+            if backtest_err:
+                st.caption(f"Backtest error: {backtest_err}")
+
+            st.caption(f"Price diagnostics: {diag}")
+            if cols:
+                st.caption(f"Price columns: {', '.join(cols)}")
+            if horizons:
+                st.caption(f"Model horizons: {horizons}")
 
     
     
