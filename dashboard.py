@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import pickle
+import subprocess
+import sys
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -1337,6 +1339,140 @@ def _render_html_block(html: str) -> None:
         # Fallback for older versions.
         st.markdown(html, unsafe_allow_html=True)
 
+
+def _run_python_script(script_filename: str, *, timeout_s: int) -> dict:
+    """Run a known local python script and capture output.
+
+    NOTE: This executes on the machine hosting the Streamlit app.
+    """
+    script_path = (BASE_DIR / script_filename).resolve()
+    started_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    if not script_path.exists():
+        return {
+            "script": script_filename,
+            "started_at": started_at,
+            "returncode": 127,
+            "stdout": "",
+            "stderr": f"Script not found: {script_path}",
+            "timeout_s": timeout_s,
+        }
+
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=str(BASE_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=max(1, int(timeout_s)),
+        )
+        return {
+            "script": script_filename,
+            "started_at": started_at,
+            "returncode": int(proc.returncode),
+            "stdout": proc.stdout or "",
+            "stderr": proc.stderr or "",
+            "timeout_s": timeout_s,
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "script": script_filename,
+            "started_at": started_at,
+            "returncode": 124,
+            "stdout": (e.stdout or "") if hasattr(e, "stdout") else "",
+            "stderr": (e.stderr or "") if hasattr(e, "stderr") else "",
+            "timeout_s": timeout_s,
+            "timed_out": True,
+        }
+    except Exception as e:
+        return {
+            "script": script_filename,
+            "started_at": started_at,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": f"Failed to run script: {e}",
+            "timeout_s": timeout_s,
+        }
+
+
+def _render_run_scripts_section() -> None:
+    """Render buttons that run key project scripts."""
+    st.markdown("### ▶️ Run Scripts")
+    st.caption("Runs on the server hosting this dashboard.")
+
+    scripts = {
+        "data_collector": {
+            "label": "Run data_collector",
+            "file": "data_collector.py",
+            "timeout_s": 180,
+        },
+        "feature_engineering": {
+            "label": "Run feature_engineering",
+            "file": "feature_engineering.py",
+            "timeout_s": 300,
+        },
+        "enhanced_predictor": {
+            "label": "Run enhanced_predictor",
+            "file": "enhanced_predictor.py",
+            "timeout_s": 120,
+        },
+        "train_simple": {
+            "label": "Run train_simple (training)",
+            "file": "train_simple.py",
+            "timeout_s": 3600,
+        },
+        "predict_realtime": {
+            "label": "Run predict_realtime",
+            "file": "predict_realtime.py",
+            "timeout_s": 300,
+        },
+    }
+
+    if "script_running" not in st.session_state:
+        st.session_state.script_running = False
+
+    def _run_and_store(script_key: str) -> None:
+        cfg = scripts[script_key]
+        st.session_state.script_running = True
+        try:
+            with st.spinner(f"Running {cfg['file']}…"):
+                result = _run_python_script(cfg["file"], timeout_s=int(cfg["timeout_s"]))
+            st.session_state.last_script_run = result
+        finally:
+            st.session_state.script_running = False
+
+    disabled = bool(st.session_state.script_running)
+
+    for key, cfg in scripts.items():
+        if st.button(cfg["label"], use_container_width=True, key=f"run_script_{key}", disabled=disabled):
+            _run_and_store(key)
+
+    last = st.session_state.get("last_script_run")
+    if last:
+        rc = last.get("returncode")
+        timed_out = bool(last.get("timed_out"))
+        status = "✅ Success" if rc == 0 else ("⏱️ Timed out" if timed_out else "❌ Failed")
+        st.markdown("---")
+        st.markdown("### 🧾 Last Script Output")
+        st.write(f"{status} · {last.get('script')} · started {last.get('started_at')} · timeout {last.get('timeout_s')}s")
+        stdout = (last.get("stdout") or "").strip()
+        stderr = (last.get("stderr") or "").strip()
+        combined = ""
+        if stdout:
+            combined += "[stdout]\n" + stdout + "\n"
+        if stderr:
+            combined += "\n[stderr]\n" + stderr + "\n"
+        if not combined:
+            combined = "(no output)"
+        max_chars = 20000
+        if len(combined) > max_chars:
+            combined = "(truncated)\n" + combined[-max_chars:]
+        st.code(combined)
+
 def main():
     # Thin status strip (essentials first) — update once metrics are available
     status_ph = st.empty()
@@ -1392,6 +1528,9 @@ def main():
                     - Historical analysis
                     """
                 )
+
+                st.markdown("---")
+                _render_run_scripts_section()
         else:
             if st.button("☰", help="Open menu", key="menu_toggle"):
                 st.session_state.menu_open = not st.session_state.menu_open
@@ -1422,6 +1561,9 @@ def main():
                 - Historical analysis
                 """
             )
+
+            st.markdown("---")
+            _render_run_scripts_section()
     
     # Check if model exists
     if not MODEL_PATH.exists() or not METADATA_PATH.exists():
