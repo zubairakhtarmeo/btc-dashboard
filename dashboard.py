@@ -1082,17 +1082,34 @@ def compute_historical_backtest(
     days: int = 30,
 ) -> pd.DataFrame:
     """Compute a rolling backtest series: predicted vs actual for past data."""
+    debug: dict[str, object] = {
+        'horizon_hours': int(horizon_hours),
+        'days': int(days),
+    }
+
+    def _empty(reason: str) -> pd.DataFrame:
+        df0 = pd.DataFrame()
+        try:
+            debug['reason'] = reason
+            df0.attrs = dict(getattr(df0, 'attrs', {}) or {})
+            df0.attrs['debug'] = debug
+        except Exception:
+            pass
+        return df0
+
     if _predictor is None or _metadata is None or price_data is None or len(price_data) == 0:
-        return pd.DataFrame()
+        return _empty('missing_inputs')
 
     # Ensure we have a clean datetime index
     price_df = _ensure_datetime_index(price_data)
     if not isinstance(price_df.index, pd.DatetimeIndex):
-        return pd.DataFrame()
+        return _empty('price_index_not_datetime')
 
     features_df = add_simple_features(price_df)
     if features_df.empty:
-        return pd.DataFrame()
+        debug['price_points'] = int(len(price_df))
+        debug['price_cols'] = list(getattr(price_df, 'columns', []))
+        return _empty('features_empty')
 
     feature_names = _metadata['feature_names']
     features_df_clean = features_df.select_dtypes(include=[np.number])
@@ -1108,6 +1125,9 @@ def compute_historical_backtest(
 
     # Work on a limited window for performance
     points_needed = int(days * 24 + seq_len + horizon_hours + 5)
+    debug['features_points'] = int(len(features))
+    debug['seq_len'] = int(seq_len)
+    debug['points_needed'] = int(points_needed)
     if len(features) > points_needed:
         start = len(features) - points_needed
         idx = features.index[start:]
@@ -1116,8 +1136,10 @@ def compute_historical_backtest(
         idx = features.index
         scaled = features_scaled
 
-    if horizon_hours not in list(getattr(predictor, 'prediction_horizons', [])):
-        return pd.DataFrame()
+    horizons = list(getattr(predictor, 'prediction_horizons', []) or [])
+    debug['model_horizons'] = horizons
+    if horizon_hours not in horizons:
+        return _empty('horizon_not_supported')
 
     horizon_idx = list(predictor.prediction_horizons).index(horizon_hours)
 
@@ -1132,18 +1154,23 @@ def compute_historical_backtest(
         target_ts.append(tts)
 
     if len(X_list) == 0:
-        return pd.DataFrame()
+        return _empty('no_sequences')
 
     X = np.asarray(X_list, dtype=np.float32)
 
     # Single forward pass for speed (no MC dropout)
-    raw_pred = predictor.model.predict(X, verbose=0)
+    try:
+        raw_pred = predictor.model.predict(X, verbose=0)
+    except Exception as e:
+        debug['predict_error'] = str(e)
+        return _empty('predict_failed')
     price_scaled = raw_pred[horizon_idx * 3]
     price_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
 
     # Ensure target_at is consistently UTC tz-aware to avoid tz-naive/aware comparison issues.
     pred_df = pd.DataFrame({'target_at': pd.to_datetime(target_ts, utc=True), 'predicted': price_pred})
     pred_df = pred_df.dropna(subset=['predicted']).sort_values('target_at')
+    debug['pred_rows'] = int(len(pred_df))
 
     # Align actual close by last known candle at-or-before target time (prevents future leakage).
     # IMPORTANT: Use the full close series (UTC-indexed) rather than a position slice.
@@ -1173,11 +1200,23 @@ def compute_historical_backtest(
             actual_at.append(np.nan)
 
     pred_df['actual'] = actual_at
+    matched = int(pd.Series(actual_at).notna().sum()) if len(actual_at) else 0
+    debug['matched_actual_rows'] = matched
+    debug['tolerance_hours'] = float(tolerance_seconds) / 3600.0
+
     pred_df = pred_df.dropna(subset=['actual'])
+    debug['rows_after_actual_drop'] = int(len(pred_df))
 
     # Limit to last N days in the final result
     cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days)
     pred_df = pred_df[pred_df['target_at'] >= cutoff]
+    debug['rows_after_cutoff'] = int(len(pred_df))
+
+    try:
+        pred_df.attrs = dict(getattr(pred_df, 'attrs', {}) or {})
+        pred_df.attrs['debug'] = debug
+    except Exception:
+        pass
     return pred_df
 
 
@@ -1644,6 +1683,13 @@ def main():
                 "Backtest is temporarily unavailable. This usually resolves after a refresh once enough 1H candles load. "
                 "(It requires ~7 days of hourly candles + model sequence window.)"
             )
+
+            try:
+                dbg = getattr(bt24, 'attrs', {}).get('debug') if isinstance(bt24, pd.DataFrame) else None
+            except Exception:
+                dbg = None
+            if dbg:
+                st.caption(f"Backtest debug: {dbg}")
 
             # Diagnostics (best-effort) to help debug Streamlit Cloud data/provider issues.
             try:
