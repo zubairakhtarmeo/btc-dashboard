@@ -1184,23 +1184,31 @@ def compute_historical_backtest(
     # (at-or-before target) but allow a wider tolerance so we don't drop the entire backtest.
     tolerance_seconds = 4 * 3600  # 4 hours
 
-    actual_at = []
-    for t in pred_df['target_at']:
-        try:
-            pos = actual.index.get_indexer([t], method='pad')[0]
-            if pos < 0:
-                actual_at.append(np.nan)
-                continue
-            ts = actual.index[pos]
-            if (t - ts).total_seconds() <= tolerance_seconds:
-                actual_at.append(float(actual.iloc[pos]))
-            else:
-                actual_at.append(np.nan)
-        except Exception:
-            actual_at.append(np.nan)
+    # Robust non-leaky alignment using merge_asof (backward join):
+    # - avoids per-row get_indexer edge cases on some hosts
+    # - keeps the "at-or-before" semantics
+    try:
+        actual_df = actual.reset_index()
+        actual_df.columns = ['ts', 'actual']
+        actual_df['ts'] = pd.to_datetime(actual_df['ts'], utc=True, errors='coerce')
+        actual_df = actual_df.dropna(subset=['ts', 'actual']).sort_values('ts')
 
-    pred_df['actual'] = actual_at
-    matched = int(pd.Series(actual_at).notna().sum()) if len(actual_at) else 0
+        pred_sorted = pred_df.sort_values('target_at')
+        merged = pd.merge_asof(
+            pred_sorted,
+            actual_df,
+            left_on='target_at',
+            right_on='ts',
+            direction='backward',
+            tolerance=pd.Timedelta(seconds=tolerance_seconds),
+        )
+
+        pred_df = merged.drop(columns=['ts'])
+    except Exception as e:
+        debug['actual_match_error'] = str(e)
+        return _empty('actual_match_failed')
+
+    matched = int(pred_df['actual'].notna().sum()) if 'actual' in pred_df.columns else 0
     debug['matched_actual_rows'] = matched
     debug['tolerance_hours'] = float(tolerance_seconds) / 3600.0
 
