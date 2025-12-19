@@ -50,6 +50,10 @@ METADATA_PATH = BASE_DIR / 'models' / 'bitcoin_real_simplified_metadata.pkl'
 VALIDATION_24H_PATH = BASE_DIR / 'cache' / 'validation_24h.json'
 PREDICTION_LOG_PATH = BASE_DIR / 'cache' / 'prediction_log.json'
 
+# Optional local artifacts produced by scripts (data_collector.py / feature_engineering.py)
+CACHED_PRICE_PATH = BASE_DIR / 'cache' / 'price_data.pkl'
+CACHED_SIMPLE_FEATURES_PATH = BASE_DIR / 'cache' / 'simple_features.pkl'
+
 
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure df has a UTC DatetimeIndex; never raises."""
@@ -952,8 +956,12 @@ def add_simple_features(df):
     return df.dropna()
 
 @st.cache_resource
-def load_model_and_predictor():
-    """Load model and predictor (cached for performance)"""
+def load_model_and_predictor(model_mtime: float, metadata_mtime: float):
+    """Load model and predictor (cached for performance).
+
+    The cache key includes the model/metadata mtimes so that if you retrain and
+    the files change, Streamlit automatically reloads them.
+    """
     try:
         with open(METADATA_PATH, 'rb') as f:
             metadata = pickle.load(f)
@@ -981,21 +989,45 @@ def load_model_and_predictor():
         return None, None
 
 @st.cache_data(ttl=60)  # Cache for 60 seconds
-def fetch_live_data():
-    """Fetch live Bitcoin price and historical data"""
+def fetch_live_data(use_cached_history: bool, cached_history_mtime: float):
+    """Fetch live Bitcoin price and historical data.
+
+    If use_cached_history is True and cache/price_data.pkl exists, use it as
+    the historical series (and still fetch live current price).
+    """
     # The dashboard already uses Streamlit in-memory caching (ttl=60).
     # Disk caching has caused stale/flat series on Streamlit Cloud, so keep it off here.
     collector = CryptoDataCollector(use_cache=False)
     
     try:
-        current_price = collector.get_current_price('bitcoin')
-        price_data = collector.price_collector.get_price_data('bitcoin', hours_back=2000, interval='1h')
+        current_price = None
+        try:
+            current_price = collector.get_current_price('bitcoin')
+        except Exception:
+            current_price = None
+
+        price_data = None
+        if bool(use_cached_history) and CACHED_PRICE_PATH.exists():
+            try:
+                price_data = pd.read_pickle(str(CACHED_PRICE_PATH))
+            except Exception:
+                price_data = None
+
+        if price_data is None or not isinstance(price_data, pd.DataFrame) or len(price_data) == 0:
+            price_data = collector.price_collector.get_price_data('bitcoin', hours_back=2000, interval='1h')
+
+        # If live price failed, fall back to last close
+        if current_price is None:
+            try:
+                current_price = float(price_data['close'].iloc[-1])
+            except Exception:
+                current_price = None
 
         # Only blend live price into the last candle if it's close to the historical last close.
         # This prevents a confusing vertical "cliff" when the historical series is stale/flat.
         try:
             last_close = float(price_data['close'].iloc[-1])
-            if last_close > 0 and abs(float(current_price) - last_close) / last_close <= 0.01:
+            if current_price is not None and last_close > 0 and abs(float(current_price) - last_close) / last_close <= 0.01:
                 price_data.iloc[-1, price_data.columns.get_loc('close')] = current_price
         except Exception:
             pass
@@ -1405,6 +1437,23 @@ def _render_run_scripts_section() -> None:
     st.markdown("### ▶️ Run Scripts")
     st.caption("Runs on the server hosting this dashboard.")
 
+    # Use artifacts (if present) instead of always pulling live history.
+    if "use_cached_history" not in st.session_state:
+        st.session_state.use_cached_history = False
+    if "use_cached_features" not in st.session_state:
+        st.session_state.use_cached_features = False
+
+    st.session_state.use_cached_history = st.checkbox(
+        "Use cached history from data_collector (cache/price_data.pkl)",
+        value=bool(st.session_state.use_cached_history),
+        key="use_cached_history_chk",
+    )
+    st.session_state.use_cached_features = st.checkbox(
+        "Use cached engineered features (cache/simple_features.pkl)",
+        value=bool(st.session_state.use_cached_features),
+        key="use_cached_features_chk",
+    )
+
     scripts = {
         "data_collector": {
             "label": "Run data_collector",
@@ -1443,6 +1492,15 @@ def _render_run_scripts_section() -> None:
             with st.spinner(f"Running {cfg['file']}…"):
                 result = _run_python_script(cfg["file"], timeout_s=int(cfg["timeout_s"]))
             st.session_state.last_script_run = result
+
+            # After scripts that update on-disk artifacts or model files, rerun so the
+            # dashboard picks up the latest versions. No cache clearing needed.
+            if int(result.get('returncode') or 0) == 0 and cfg.get('file') in {
+                'train_simple.py',
+                'data_collector.py',
+                'feature_engineering.py',
+            }:
+                st.rerun()
         finally:
             st.session_state.script_running = False
 
@@ -1507,7 +1565,6 @@ def main():
             with st.popover("☰"):
                 st.markdown("### ⚙️ Controls")
                 if st.button("🔄 Refresh Dashboard", use_container_width=True, key="menu_refresh"):
-                    st.cache_data.clear()
                     st.rerun()
 
                 auto_refresh = st.checkbox("Auto-refresh (60s)", key="menu_auto_refresh")
@@ -1540,7 +1597,6 @@ def main():
         with st.expander("Menu", expanded=bool(st.session_state.menu_open)):
             st.markdown("### ⚙️ Controls")
             if st.button("🔄 Refresh Dashboard", use_container_width=True, key="menu_refresh_fallback"):
-                st.cache_data.clear()
                 st.rerun()
 
             auto_refresh = st.checkbox("Auto-refresh (60s)", key="menu_auto_refresh_fallback")
@@ -1573,7 +1629,9 @@ def main():
     
     # Load model
     with st.spinner("🔄 Loading AI Engine..."):
-        predictor, metadata = load_model_and_predictor()
+        model_mtime = float(MODEL_PATH.stat().st_mtime) if MODEL_PATH.exists() else 0.0
+        metadata_mtime = float(METADATA_PATH.stat().st_mtime) if METADATA_PATH.exists() else 0.0
+        predictor, metadata = load_model_and_predictor(model_mtime, metadata_mtime)
     
     if predictor is None:
         st.error("Failed to load model. Please check the model files.")
@@ -1581,7 +1639,11 @@ def main():
     
     # Fetch live data
     with st.spinner("📡 Fetching Live Market Data..."):
-        current_price, price_data, error = fetch_live_data()
+        cached_history_mtime = float(CACHED_PRICE_PATH.stat().st_mtime) if CACHED_PRICE_PATH.exists() else 0.0
+        current_price, price_data, error = fetch_live_data(
+            bool(st.session_state.get('use_cached_history', False)),
+            cached_history_mtime,
+        )
     
     if error:
         st.error(f"⚠️ Failed to fetch live data: {error}")
@@ -1637,7 +1699,21 @@ def main():
     
     # Generate features and predictions
     with st.spinner("🧠 Generating AI Predictions..."):
-        features_df = add_simple_features(price_data)
+        features_df = None
+        if bool(st.session_state.get('use_cached_features', False)) and CACHED_SIMPLE_FEATURES_PATH.exists():
+            try:
+                cached_features = pd.read_pickle(str(CACHED_SIMPLE_FEATURES_PATH))
+                cached_features = cached_features.dropna() if isinstance(cached_features, pd.DataFrame) else None
+                req = set(metadata.get('feature_names') or [])
+                if cached_features is not None and req and req.issubset(set(cached_features.columns)):
+                    features_df = cached_features
+                else:
+                    features_df = None
+            except Exception:
+                features_df = None
+
+        if features_df is None:
+            features_df = add_simple_features(price_data)
         predictions = generate_predictions(predictor, metadata, features_df)
     
     # Prediction horizons
@@ -2235,4 +2311,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
