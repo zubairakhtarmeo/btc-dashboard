@@ -1150,7 +1150,11 @@ def compute_historical_backtest(
     # Align actual close by last known candle at-or-before target time (prevents future leakage)
     actual = close_series.copy()
     actual.index = pd.to_datetime(actual.index, utc=True, errors='coerce')
-    actual = actual.sort_index()
+    actual = actual[~actual.index.isna()].sort_index()
+
+    # Cloud providers occasionally return missing hourly candles; keep matching non-leaky
+    # (at-or-before target) but allow a wider tolerance so we don't drop the entire backtest.
+    tolerance_seconds = 4 * 3600  # 4 hours
 
     actual_at = []
     for t in pred_df['target_at']:
@@ -1160,7 +1164,7 @@ def compute_historical_backtest(
                 actual_at.append(np.nan)
                 continue
             ts = actual.index[pos]
-            if (t - ts).total_seconds() <= 90 * 60:
+            if (t - ts).total_seconds() <= tolerance_seconds:
                 actual_at.append(float(actual.iloc[pos]))
             else:
                 actual_at.append(np.nan)
