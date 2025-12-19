@@ -18,9 +18,31 @@ Optional:
 
 from __future__ import annotations
 
+import logging
 import os
 import json
+from collections.abc import Mapping
 from typing import Any, Iterable
+
+_logger = logging.getLogger(__name__)
+_warned: set[str] = set()
+_connected_printed = False
+
+
+def _warn_once(key: str, message: str) -> None:
+    """Best-effort logging to Streamlit Cloud logs without spamming."""
+    global _warned
+    if key in _warned:
+        return
+    _warned.add(key)
+    try:
+        print(message)
+    except Exception:
+        pass
+    try:
+        _logger.warning(message)
+    except Exception:
+        pass
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -109,8 +131,9 @@ def _get_client():
         import streamlit as st  # type: ignore
 
         gcp_info = st.secrets.get("gcp_service_account")
-        if isinstance(gcp_info, dict):
-            creds = Credentials.from_service_account_info(gcp_info, scopes=scopes)
+        # Streamlit returns an AttrDict-like mapping, not always a plain dict.
+        if isinstance(gcp_info, Mapping):
+            creds = Credentials.from_service_account_info(dict(gcp_info), scopes=scopes)
             return gspread.authorize(creds)
     except Exception:
         pass
@@ -217,6 +240,7 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
 
         spreadsheet_id = _get_setting("GSHEETS_SPREADSHEET_ID")
         if not spreadsheet_id:
+            _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
             return
 
         tab = _get_setting("GSHEETS_VALIDATION_TAB", "validation_24h") or "validation_24h"
@@ -231,9 +255,19 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
 
         spreadsheet = _open_spreadsheet(spreadsheet_id)
         ws = _ensure_worksheet(spreadsheet, tab, headers)
-        _upsert_by_key(ws, headers=headers, key_field="made_at", records=records)
-    except Exception:
-        # Best-effort; never block the dashboard.
+        appended, updated = _upsert_by_key(ws, headers=headers, key_field="made_at", records=records)
+
+        global _connected_printed
+        if not _connected_printed:
+            _warn_once("connected", f"[GSHEETS] Connected OK. Writing to tab '{tab}'.")
+            _connected_printed = True
+
+        # Only log writes when something actually changed.
+        if appended or updated:
+            _warn_once(f"validation_write_{tab}", f"[GSHEETS] validation sync wrote rows (appended={appended}, updated={updated})")
+    except Exception as e:
+        # Best-effort; never block the dashboard, but DO log once so misconfig is visible.
+        _warn_once("validation_error", f"[GSHEETS] validation sync failed: {type(e).__name__}: {e}")
         return
 
 
@@ -247,6 +281,7 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
 
         spreadsheet_id = _get_setting("GSHEETS_SPREADSHEET_ID")
         if not spreadsheet_id:
+            _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
             return
 
         tab = _get_setting("GSHEETS_PREDICTION_TAB", "prediction_log") or "prediction_log"
@@ -264,6 +299,9 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
         spreadsheet = _open_spreadsheet(spreadsheet_id)
         ws = _ensure_worksheet(spreadsheet, tab, headers)
 
-        _upsert_by_key(ws, headers=headers, key_field="pk", records=records)
-    except Exception:
+        appended, updated = _upsert_by_key(ws, headers=headers, key_field="pk", records=records)
+        if appended or updated:
+            _warn_once(f"pred_write_{tab}", f"[GSHEETS] prediction sync wrote rows (appended={appended}, updated={updated})")
+    except Exception as e:
+        _warn_once("prediction_error", f"[GSHEETS] prediction sync failed: {type(e).__name__}: {e}")
         return
