@@ -1266,6 +1266,20 @@ def _render_status_strip(
         "</div></div>"
     )
 
+
+def _render_price_accuracy_badge(accuracy_text: str) -> str:
+    return (
+        "<div style='display:flex; justify-content:center; margin: 0.15rem 0 0.65rem 0;'>"
+        "<div style='padding: 0.45rem 0.9rem; border-radius: 999px; "
+        "border: 1px solid rgba(102, 126, 234, 0.28); "
+        "background: linear-gradient(90deg, var(--dsba-surface-0) 0%, var(--dsba-surface-1) 100%); "
+        "box-shadow: var(--dsba-shadow); "
+        "color: var(--dsba-text); "
+        "font-weight: 800; font-size: 0.92rem; letter-spacing: 0.2px;'>"
+        f"{accuracy_text}"
+        "</div></div>"
+    )
+
 def create_prediction_card(horizon, label, current_price, pred_price, pred_std, direction_prob, predictor):
     """Create a prediction card for a specific horizon"""
     # Calculate metrics
@@ -1474,6 +1488,9 @@ def main():
 </div>""",
         unsafe_allow_html=True,
     )
+
+    # Accuracy badge placeholder (updated after predictions/backtest are computed)
+    price_accuracy_ph = st.empty()
     
     # Generate features and predictions
     with st.spinner("🧠 Generating AI Predictions..."):
@@ -1551,6 +1568,11 @@ def main():
             utc_hms=datetime.utcnow().strftime('%H:%M:%S'),
             accuracy_text=accuracy_text,
         ),
+        unsafe_allow_html=True,
+    )
+
+    price_accuracy_ph.markdown(
+        _render_price_accuracy_badge(accuracy_text),
         unsafe_allow_html=True,
     )
     
