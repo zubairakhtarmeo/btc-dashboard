@@ -113,7 +113,7 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
 
 def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tuple[str, pd.DataFrame]:
     """Store current 24H prediction and, when due, fill actual price. Returns summary HTML + chart DF."""
-    now_utc = pd.Timestamp.utcnow().floor('H')
+    now_utc = pd.Timestamp.utcnow().floor('h')
     target_utc = now_utc + pd.Timedelta(hours=24)
 
     records = _load_validation_records()
@@ -172,18 +172,18 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
     if not df_chart.empty:
         last = df_chart.iloc[-1]
         summary_html = (
-            "<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.25);'>"
-            "<div style='color: rgba(255,255,255,0.95); font-size: 0.82rem; font-weight: 700;'>Last 24H Validation</div>"
-            f"<div style='color: rgba(255,255,255,0.9); font-size: 0.78rem; margin-top: 0.35rem;'>"
+            "<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--dsba-border);'>"
+            "<div style='color: var(--dsba-text); font-size: 0.82rem; font-weight: 700;'>Last 24H Validation</div>"
+            f"<div style='color: var(--dsba-text-2); font-size: 0.78rem; margin-top: 0.35rem;'>"
             f"Pred: <b>${last['predicted']:,.0f}</b> &nbsp;•&nbsp; Actual: <b>${last['actual']:,.0f}</b> &nbsp;•&nbsp; Error (A−P): <b>{last['error']:+,.0f}</b> &nbsp;•&nbsp; Accuracy: <b>{last['accuracy_pct']:.1f}%</b>"
             "</div>"
             "</div>"
         )
     else:
         summary_html = (
-            "<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.25);'>"
-            "<div style='color: rgba(255,255,255,0.95); font-size: 0.82rem; font-weight: 700;'>24H Validation</div>"
-            "<div style='color: rgba(255,255,255,0.85); font-size: 0.78rem; margin-top: 0.35rem;'>"
+            "<div style='margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--dsba-border);'>"
+            "<div style='color: var(--dsba-text); font-size: 0.82rem; font-weight: 700;'>24H Validation</div>"
+            "<div style='color: var(--dsba-text-2); font-size: 0.78rem; margin-top: 0.35rem;'>"
             "Tracking started — first comparison will appear after 24 hours."
             "</div>"
             "</div>"
@@ -217,7 +217,7 @@ def _save_prediction_log(records: list[dict]) -> None:
 def _append_prediction_log(prediction_cards: list[dict], current_price: float) -> None:
     """Append current predictions to a local JSON log for future predicted-vs-actual charts."""
     try:
-        now_utc = pd.Timestamp.utcnow().floor('H')
+        now_utc = pd.Timestamp.utcnow().floor('h')
         horizon_to_hours = {
             '1H': 1,
             '6H': 6,
@@ -264,6 +264,68 @@ def _append_prediction_log(prediction_cards: list[dict], current_price: float) -
         _save_prediction_log(records)
     except Exception:
         return
+
+
+def _build_recent_predicted_vs_actual_from_log(
+    price_data: pd.DataFrame,
+    *,
+    horizon_label: str = '1H',
+    lookback_hours: int = 24,
+) -> pd.DataFrame:
+    """Build a recent predicted-vs-actual series from prediction_log.json.
+
+    Uses the log entries created by `_append_prediction_log` and matches each `target_at`
+    to the nearest actual close price in `price_data`.
+    """
+    try:
+        records = _load_prediction_log()
+        if not records:
+            return pd.DataFrame()
+
+        now_utc = pd.Timestamp.utcnow()
+        cutoff = now_utc - pd.Timedelta(hours=int(lookback_hours))
+
+        rows: list[dict] = []
+        for r in records:
+            if r.get('horizon_label') != horizon_label:
+                continue
+
+            created_at = pd.to_datetime(r.get('created_at'), utc=True, errors='coerce')
+            target_at = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
+            if created_at is pd.NaT or target_at is pd.NaT:
+                continue
+
+            if created_at < cutoff:
+                continue
+
+            # Only validate targets that should already have happened.
+            if target_at > now_utc.tz_localize('UTC'):
+                continue
+
+            predicted_price = r.get('predicted_price')
+            if predicted_price is None or not np.isfinite(float(predicted_price)):
+                continue
+
+            actual_price, actual_ts = _nearest_close_at(price_data, target_at)
+            if actual_price is None or actual_ts is None:
+                continue
+
+            rows.append({
+                'created_at': created_at,
+                'target_at': target_at,
+                'predicted': float(predicted_price),
+                'actual': float(actual_price),
+                'actual_at': pd.to_datetime(actual_ts, utc=True),
+            })
+
+        if not rows:
+            return pd.DataFrame()
+
+        out = pd.DataFrame(rows)
+        out = out.sort_values('target_at')
+        return out
+    except Exception:
+        return pd.DataFrame()
 
 # Custom CSS for Premium Enterprise Design
 st.markdown("""
@@ -1379,6 +1441,59 @@ def main():
             )
 
             st.plotly_chart(fig_val, use_container_width=True)
+
+        # Recent validation from prediction log (useful immediately: 1H horizon fills within hours)
+        st.markdown('<div class="subsection-title" style="margin-top: 1.1rem;">Recent: Predicted vs Actual (last 24H)</div>', unsafe_allow_html=True)
+        recent_df = _build_recent_predicted_vs_actual_from_log(price_data, horizon_label='1H', lookback_hours=24)
+        if recent_df.empty:
+            st.info("No completed 1H targets yet. Keep the dashboard running for a few hours (or enable auto-refresh) and this chart will populate.")
+        else:
+            fig_recent = go.Figure()
+            fig_recent.add_trace(go.Scatter(
+                x=recent_df['target_at'],
+                y=recent_df['predicted'],
+                mode='lines+markers',
+                name='Predicted (1H)',
+                line=dict(color='#22c55e', width=2, dash='dash'),
+                marker=dict(size=7, color='#22c55e', line=dict(color=plot_marker_outline, width=1)),
+                hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
+            ))
+            fig_recent.add_trace(go.Scatter(
+                x=recent_df['target_at'],
+                y=recent_df['actual'],
+                mode='lines+markers',
+                name='Actual',
+                line=dict(color='#667eea', width=2),
+                marker=dict(size=7, color='#667eea', line=dict(color=plot_marker_outline, width=1)),
+                hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
+            ))
+
+            fig_recent.update_layout(
+                title=dict(
+                    text='Recent 1H Targets: Predicted vs Actual (UTC)',
+                    font=dict(size=13, color=plot_title_color, weight=600)
+                ),
+                xaxis_title='Target Time (UTC)',
+                yaxis_title='Price (USD)',
+                hovermode='x unified',
+                height=280,
+                template=plotly_template,
+                paper_bgcolor=plot_panel_bg,
+                plot_bgcolor=plot_panel_bg,
+                font=dict(size=11, color=plot_text_color),
+                margin=dict(t=45, b=35, l=40, r=40),
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='right',
+                    x=1,
+                    bgcolor=plot_legend_bg,
+                    bordercolor=plot_border,
+                    borderwidth=1
+                )
+            )
+            st.plotly_chart(fig_recent, use_container_width=True)
 
     
     
