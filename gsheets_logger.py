@@ -28,6 +28,7 @@ from typing import Any, Iterable
 _logger = logging.getLogger(__name__)
 _warned: set[str] = set()
 _connected_printed = False
+_client_email_for_logs: str | None = None
 
 
 def _warn_once(key: str, message: str) -> None:
@@ -120,6 +121,7 @@ def _as_cell(value: Any) -> str:
 
 
 def _get_client():
+    global _client_email_for_logs
     # Lazy import so the dashboard can run without these deps.
     import gspread
     from google.oauth2.service_account import Credentials
@@ -133,6 +135,10 @@ def _get_client():
     creds_path = _get_setting("GSHEETS_SERVICE_ACCOUNT_JSON")
     if creds_path and os.path.exists(creds_path):
         creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
+        try:
+            _client_email_for_logs = getattr(creds, 'service_account_email', None)
+        except Exception:
+            _client_email_for_logs = None
         return gspread.authorize(creds)
 
     # Option B (Streamlit Cloud): service-account JSON content or dict via secrets
@@ -144,6 +150,10 @@ def _get_client():
             info = None
         if isinstance(info, dict):
             creds = Credentials.from_service_account_info(info, scopes=scopes)
+            try:
+                _client_email_for_logs = info.get('client_email')
+            except Exception:
+                _client_email_for_logs = None
             return gspread.authorize(creds)
 
     # Option C (Streamlit Cloud conventional name): [gcp_service_account] in secrets
@@ -153,7 +163,12 @@ def _get_client():
         gcp_info = st.secrets.get("gcp_service_account")
         # Streamlit returns an AttrDict-like mapping, not always a plain dict.
         if isinstance(gcp_info, Mapping):
-            creds = Credentials.from_service_account_info(dict(gcp_info), scopes=scopes)
+            gcp_dict = dict(gcp_info)
+            creds = Credentials.from_service_account_info(gcp_dict, scopes=scopes)
+            try:
+                _client_email_for_logs = gcp_dict.get('client_email')
+            except Exception:
+                _client_email_for_logs = None
             return gspread.authorize(creds)
     except Exception:
         pass
@@ -258,7 +273,8 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
         if not _is_truthy(_get_setting("GSHEETS_ENABLED", "")):
             return
 
-        spreadsheet_id = _normalize_spreadsheet_id(_get_setting("GSHEETS_SPREADSHEET_ID"))
+        raw_id = _get_setting("GSHEETS_SPREADSHEET_ID")
+        spreadsheet_id = _normalize_spreadsheet_id(raw_id)
         if not spreadsheet_id:
             _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
             return
@@ -279,7 +295,11 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
 
         global _connected_printed
         if not _connected_printed:
-            _warn_once("connected", f"[GSHEETS] Connected OK. Writing to tab '{tab}'.")
+            email = _client_email_for_logs or "(unknown)"
+            _warn_once(
+                "connected",
+                f"[GSHEETS] Connected OK. spreadsheet_id='{spreadsheet_id}' tab='{tab}' service_account='{email}'",
+            )
             _connected_printed = True
 
         # Only log writes when something actually changed.
@@ -291,6 +311,11 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
             _warn_once(
                 "spreadsheet_not_found_hint",
                 "[GSHEETS] SpreadsheetNotFound (404). This usually means the Spreadsheet ID is wrong OR the sheet is not shared with the service account client_email (Google returns 404 when unauthorized).",
+            )
+            email = _client_email_for_logs or "(unknown)"
+            _warn_once(
+                "spreadsheet_not_found_details",
+                f"[GSHEETS] Debug: raw_GSHEETS_SPREADSHEET_ID={raw_id!r} normalized_id='{spreadsheet_id}' service_account='{email}'",
             )
         _warn_once("validation_error", f"[GSHEETS] validation sync failed: {type(e).__name__}: {e}")
         return
@@ -304,7 +329,8 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
         if not _is_truthy(_get_setting("GSHEETS_SYNC_PREDICTIONS", "")):
             return
 
-        spreadsheet_id = _normalize_spreadsheet_id(_get_setting("GSHEETS_SPREADSHEET_ID"))
+        raw_id = _get_setting("GSHEETS_SPREADSHEET_ID")
+        spreadsheet_id = _normalize_spreadsheet_id(raw_id)
         if not spreadsheet_id:
             _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
             return
@@ -332,6 +358,11 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
             _warn_once(
                 "spreadsheet_not_found_hint",
                 "[GSHEETS] SpreadsheetNotFound (404). This usually means the Spreadsheet ID is wrong OR the sheet is not shared with the service account client_email (Google returns 404 when unauthorized).",
+            )
+            email = _client_email_for_logs or "(unknown)"
+            _warn_once(
+                "spreadsheet_not_found_details",
+                f"[GSHEETS] Debug: raw_GSHEETS_SPREADSHEET_ID={raw_id!r} normalized_id='{spreadsheet_id}' service_account='{email}'",
             )
         _warn_once("prediction_error", f"[GSHEETS] prediction sync failed: {type(e).__name__}: {e}")
         return
