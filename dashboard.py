@@ -1790,16 +1790,18 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Theme-aware styling for Plotly + embedded widgets
-    theme_base = str(st.get_option("theme.base") or "").lower()
-    is_dark = theme_base == "dark"
-    plotly_template = "plotly_dark" if is_dark else "plotly_white"
-    plot_title_color = "#f1f5f9" if is_dark else "#0f172a"
-    plot_text_color = "#94a3b8" if is_dark else "#0f172a"
-    plot_panel_bg = "rgba(30, 41, 59, 0.50)" if is_dark else "rgba(255, 255, 255, 0.80)"
-    plot_legend_bg = "rgba(30, 41, 59, 0.80)" if is_dark else "rgba(255, 255, 255, 0.88)"
-    plot_border = "rgba(148, 163, 184, 0.20)" if is_dark else "rgba(15, 23, 42, 0.12)"
-    plot_marker_outline = "#0f172a" if not is_dark else "#f1f5f9"
+    # Force dark theme for Plotly charts (matches our dark UI)
+    plotly_template = "plotly_dark"
+    plot_title_color = "#f8fafc"
+    plot_text_color = "#94a3b8"
+    plot_panel_bg = "rgba(15, 15, 30, 0.95)"
+    plot_legend_bg = "rgba(25, 25, 45, 0.95)"
+    plot_border = "rgba(99, 102, 241, 0.2)"
+    plot_marker_outline = "#1a1a2e"
+    plot_grid_color = "rgba(148, 163, 184, 0.08)"
+    plot_line_color = "#6366f1"
+    plot_positive_color = "#10b981"
+    plot_negative_color = "#ef4444"
 
     # Top-left Menu (☰): replaces sidebar controls so it's always discoverable.
     # Use Streamlit popover when available; fall back to an expander.
@@ -2088,8 +2090,8 @@ def main():
                     y=validation_chart_df['predicted'],
                     mode='lines+markers',
                     name='Predicted (24H)',
-                    line=dict(color='#22c55e', width=2, dash='dash'),
-                    marker=dict(size=7, color='#22c55e', line=dict(color=plot_marker_outline, width=1)),
+                    line=dict(color=plot_positive_color, width=2, dash='dash'),
+                    marker=dict(size=8, color=plot_positive_color, line=dict(color=plot_panel_bg, width=1)),
                     hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
                 ))
                 fig_val.add_trace(go.Scatter(
@@ -2097,8 +2099,8 @@ def main():
                     y=validation_chart_df['actual'],
                     mode='lines+markers',
                     name='Actual',
-                    line=dict(color='#667eea', width=2),
-                    marker=dict(size=7, color='#667eea', line=dict(color=plot_marker_outline, width=1)),
+                    line=dict(color=plot_line_color, width=2),
+                    marker=dict(size=8, color=plot_line_color, line=dict(color=plot_panel_bg, width=1)),
                     hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
                 ))
 
@@ -2115,7 +2117,7 @@ def main():
                     paper_bgcolor=plot_panel_bg,
                     plot_bgcolor=plot_panel_bg,
                     font=dict(size=11, color=plot_text_color),
-                    margin=dict(t=45, b=35, l=40, r=40),
+                    margin=dict(t=45, b=35, l=60, r=40),
                     legend=dict(
                         orientation='h',
                         yanchor='bottom',
@@ -2124,7 +2126,21 @@ def main():
                         x=1,
                         bgcolor=plot_legend_bg,
                         bordercolor=plot_border,
-                        borderwidth=1
+                        borderwidth=1,
+                        font=dict(color=plot_text_color)
+                    ),
+                    xaxis=dict(
+                        gridcolor=plot_grid_color,
+                        linecolor=plot_border,
+                        tickfont=dict(color=plot_text_color),
+                        title_font=dict(color=plot_text_color)
+                    ),
+                    yaxis=dict(
+                        gridcolor=plot_grid_color,
+                        linecolor=plot_border,
+                        tickfont=dict(color=plot_text_color),
+                        title_font=dict(color=plot_text_color),
+                        tickformat='$,.0f'
                     )
                 )
 
@@ -2148,7 +2164,7 @@ def main():
                 y=bt24['predicted'],
                 mode='lines',
                 name='Predicted (24H)',
-                line=dict(color='#22c55e', width=2, dash='dash'),
+                line=dict(color=plot_positive_color, width=2, dash='dash'),
                 hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
             fig_bt.add_trace(go.Scatter(
@@ -2156,7 +2172,7 @@ def main():
                 y=bt24['actual'],
                 mode='lines',
                 name='Actual',
-                line=dict(color='#667eea', width=2),
+                line=dict(color=plot_line_color, width=2),
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
 
@@ -2174,7 +2190,7 @@ def main():
                 paper_bgcolor=plot_panel_bg,
                 plot_bgcolor=plot_panel_bg,
                 font=dict(size=11, color=plot_text_color),
-                margin=dict(t=45, b=35, l=40, r=40),
+                margin=dict(t=45, b=35, l=60, r=40),
                 legend=dict(
                     orientation='h',
                     yanchor='bottom',
@@ -2183,7 +2199,21 @@ def main():
                     x=1,
                     bgcolor=plot_legend_bg,
                     bordercolor=plot_border,
-                    borderwidth=1
+                    borderwidth=1,
+                    font=dict(color=plot_text_color)
+                ),
+                xaxis=dict(
+                    gridcolor=plot_grid_color,
+                    linecolor=plot_border,
+                    tickfont=dict(color=plot_text_color),
+                    title_font=dict(color=plot_text_color)
+                ),
+                yaxis=dict(
+                    gridcolor=plot_grid_color,
+                    linecolor=plot_border,
+                    tickfont=dict(color=plot_text_color),
+                    title_font=dict(color=plot_text_color),
+                    tickformat='$,.0f'
                 )
             )
             st.plotly_chart(fig_bt, width='stretch')
@@ -2361,8 +2391,8 @@ def main():
             y=[current_price] + [card['predicted_price'] for card in prediction_cards],
             mode='lines+markers',
             name='Predicted Price',
-            line=dict(color='#667eea', width=3),
-            marker=dict(size=10, color='#667eea', line=dict(color=plot_marker_outline, width=2)),
+            line=dict(color=plot_line_color, width=3),
+            marker=dict(size=12, color=plot_line_color, line=dict(color=plot_panel_bg, width=2)),
             hovertemplate='<b>%{x}</b><br>Price: $%{y:,.2f}<extra></extra>'
         ))
         
@@ -2384,7 +2414,7 @@ def main():
             y=lower_bound,
             mode='lines',
             fill='tonexty',
-            fillcolor='rgba(102, 126, 234, 0.2)',
+            fillcolor='rgba(99, 102, 241, 0.15)',
             line=dict(width=0),
             name='Uncertainty Range',
             hoverinfo='skip'
@@ -2403,7 +2433,7 @@ def main():
             paper_bgcolor=plot_panel_bg,
             plot_bgcolor=plot_panel_bg,
             font=dict(size=11, color=plot_text_color),
-            margin=dict(t=60, b=40, l=40, r=40),
+            margin=dict(t=60, b=40, l=60, r=40),
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
@@ -2412,7 +2442,21 @@ def main():
                 x=1,
                 bgcolor=plot_legend_bg,
                 bordercolor=plot_border,
-                borderwidth=1
+                borderwidth=1,
+                font=dict(color=plot_text_color)
+            ),
+            xaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color)
+            ),
+            yaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color),
+                tickformat='$,.0f'
             )
         )
         
@@ -2422,18 +2466,19 @@ def main():
         # Confidence Chart
         fig_conf = go.Figure()
         
-        colors = ['#22c55e' if card['signal'] == 'BUY' else '#ef4444' if card['signal'] == 'SELL' else '#fbbf24' for card in prediction_cards]
+        colors = [plot_positive_color if card['signal'] == 'BUY' else plot_negative_color if card['signal'] == 'SELL' else '#f59e0b' for card in prediction_cards]
         
         fig_conf.add_trace(go.Bar(
             x=[card['horizon'] for card in prediction_cards],
             y=[card['confidence'] * 100 for card in prediction_cards],
             marker=dict(
                 color=colors,
-                line=dict(color=plot_marker_outline, width=1.5)
+                line=dict(color='rgba(0,0,0,0.2)', width=0),
+                opacity=0.9
             ),
             text=[f"{card['confidence']*100:.1f}%" for card in prediction_cards],
             textposition='outside',
-            textfont=dict(size=11, color=plot_title_color, weight='bold'),
+            textfont=dict(size=12, color=plot_title_color, weight='bold'),
             hovertemplate='<b>%{x}</b><br>Confidence: %{y:.1f}%<extra></extra>'
         ))
         
@@ -2449,8 +2494,20 @@ def main():
             paper_bgcolor=plot_panel_bg,
             plot_bgcolor=plot_panel_bg,
             font=dict(size=11, color=plot_text_color),
-            yaxis=dict(range=[0, 100]),
-            margin=dict(t=60, b=40, l=40, r=40),
+            yaxis=dict(
+                range=[0, 100],
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color)
+            ),
+            xaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color)
+            ),
+            margin=dict(t=60, b=40, l=60, r=40),
             showlegend=False
         )
         
@@ -2465,7 +2522,9 @@ def main():
             y=recent['close'].astype(float),
             mode='lines',
             name='BTC Actual Price (Last 7D)',
-            line=dict(color='#667eea', width=2),
+            line=dict(color=plot_line_color, width=2),
+            fill='tozeroy',
+            fillcolor='rgba(99, 102, 241, 0.1)',
             hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.2f}<extra></extra>'
         ))
 
@@ -2485,7 +2544,7 @@ def main():
             paper_bgcolor=plot_panel_bg,
             plot_bgcolor=plot_panel_bg,
             font=dict(size=11, color=plot_text_color),
-            margin=dict(t=60, b=40, l=40, r=40),
+            margin=dict(t=60, b=40, l=60, r=40),
             legend=dict(
                 orientation='h',
                 yanchor='bottom',
@@ -2494,7 +2553,21 @@ def main():
                 x=1,
                 bgcolor=plot_legend_bg,
                 bordercolor=plot_border,
-                borderwidth=1
+                borderwidth=1,
+                font=dict(color=plot_text_color)
+            ),
+            xaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color)
+            ),
+            yaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color),
+                tickformat='$,.0f'
             )
         )
 
