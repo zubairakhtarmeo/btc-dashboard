@@ -1062,12 +1062,53 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
     }
 
-    /* Expander Override */
+    /* Expander Override - Make text visible */
     .streamlit-expanderHeader {
-        background: var(--dsba-surface-glass) !important;
-        border: 1px solid var(--dsba-border) !important;
+        background: rgba(30, 30, 50, 0.8) !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
         border-radius: 12px !important;
         font-weight: 600 !important;
+        color: #f8fafc !important;
+    }
+
+    .streamlit-expanderHeader:hover {
+        border-color: rgba(99, 102, 241, 0.5) !important;
+        background: rgba(40, 40, 60, 0.9) !important;
+    }
+
+    .streamlit-expanderHeader p, 
+    .streamlit-expanderHeader span,
+    [data-testid="stExpander"] summary span {
+        color: #f8fafc !important;
+        font-weight: 600 !important;
+    }
+
+    [data-testid="stExpander"] {
+        border: 1px solid rgba(99, 102, 241, 0.25) !important;
+        border-radius: 12px !important;
+        background: rgba(20, 20, 35, 0.6) !important;
+    }
+
+    [data-testid="stExpander"] details {
+        border: none !important;
+    }
+
+    /* Caption text - make readable */
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: #94a3b8 !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* Info boxes */
+    [data-testid="stAlert"] {
+        background: rgba(99, 102, 241, 0.15) !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+        color: #e2e8f0 !important;
+        border-radius: 12px !important;
+    }
+
+    [data-testid="stAlert"] p {
+        color: #e2e8f0 !important;
     }
 
     /* Popover/Menu Override */
@@ -1077,6 +1118,33 @@ st.markdown("""
         border: 1px solid var(--dsba-border);
         border-radius: 16px;
         box-shadow: var(--dsba-shadow);
+    }
+
+    /* General text visibility overrides */
+    .stMarkdown, .stMarkdown p, .stText {
+        color: #e2e8f0 !important;
+    }
+
+    /* Checkbox labels */
+    .stCheckbox label span {
+        color: #e2e8f0 !important;
+    }
+
+    /* Selectbox and other inputs */
+    .stSelectbox label, .stTextInput label, .stNumberInput label {
+        color: #94a3b8 !important;
+    }
+
+    /* Spinner text */
+    .stSpinner > div {
+        color: #e2e8f0 !important;
+    }
+
+    /* Code blocks */
+    .stCodeBlock {
+        background: rgba(15, 15, 30, 0.9) !important;
+        border: 1px solid rgba(99, 102, 241, 0.2) !important;
+        border-radius: 8px !important;
     }
     
     /* Loading Animation */
@@ -2632,13 +2700,13 @@ def main():
     
     # Footer
     st.markdown("""
-        <div style="margin-top: 4rem; padding: 2rem; text-align: center; border-top: 1px solid var(--dsba-border); position: relative;">
-            <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 100px; height: 2px; background: linear-gradient(90deg, transparent, var(--dsba-accent), transparent);"></div>
-            <div style="color: var(--dsba-text-3); font-size: 0.8rem; margin-bottom: 0.5rem; font-weight: 500;">
-                Built with 🧠 AI • Real-time Market Intelligence
+        <div style="margin-top: 4rem; padding: 2.5rem; text-align: center; border-top: 1px solid var(--dsba-border); position: relative;">
+            <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 150px; height: 3px; background: linear-gradient(90deg, transparent, var(--dsba-accent), var(--dsba-accent-2), transparent); border-radius: 2px;"></div>
+            <div style="font-size: 2rem; font-weight: 900; letter-spacing: 2px; margin-bottom: 0.75rem; background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 30%, #6366f1 70%, #8b5cf6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-shadow: none;">
+                POWERED BY DSBA
             </div>
-            <div style="background: linear-gradient(135deg, var(--dsba-accent) 0%, var(--dsba-accent-2) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 0.9rem; font-weight: 700; letter-spacing: 1px;">
-                BTC INTELLIGENCE
+            <div style="color: #94a3b8; font-size: 0.85rem; font-weight: 500;">
+                🧠 AI-Driven Bitcoin Intelligence • Real-time Market Analytics
             </div>
         </div>
     """, unsafe_allow_html=True)
