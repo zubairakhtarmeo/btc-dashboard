@@ -2,13 +2,13 @@
 # Requirements and Dependencies
 
 # Core Data Science & ML
-numpy>=1.21.0,<2.0.0
+numpy>=1.21.0
 pandas>=1.3.0
 scipy>=1.7.0
 scikit-learn>=1.5.0
 
-# Deep Learning - use CPU version to avoid CUDA segfaults on cloud
-tensorflow-cpu>=2.10.0
+# Deep Learning
+tensorflow>=2.10.0
 
 # NOTE: We use `tf.keras` (`from tensorflow import keras`) throughout.
 # Avoid installing standalone `keras` to prevent version conflicts on Streamlit Cloud.
