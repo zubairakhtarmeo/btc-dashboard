@@ -11,7 +11,7 @@ import pickle
 import subprocess
 import sys
 import textwrap
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -1379,7 +1379,7 @@ def _run_python_script(script_filename: str, *, timeout_s: int) -> dict:
     NOTE: This executes on the machine hosting the Streamlit app.
     """
     script_path = (BASE_DIR / script_filename).resolve()
-    started_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    started_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
     if not script_path.exists():
         return {
@@ -1507,7 +1507,7 @@ def _render_run_scripts_section() -> None:
     disabled = bool(st.session_state.script_running)
 
     for key, cfg in scripts.items():
-        if st.button(cfg["label"], use_container_width=True, key=f"run_script_{key}", disabled=disabled):
+        if st.button(cfg["label"], width='stretch', key=f"run_script_{key}", disabled=disabled):
             _run_and_store(key)
 
     last = st.session_state.get("last_script_run")
@@ -1537,7 +1537,7 @@ def main():
     status_ph = st.empty()
     status_ph.markdown(
         _render_status_strip(
-            utc_hms=datetime.utcnow().strftime('%H:%M:%S'),
+            utc_hms=datetime.now(timezone.utc).strftime('%H:%M:%S'),
             accuracy_text="Model Accuracy: calculating…",
         ),
         unsafe_allow_html=True,
@@ -1564,7 +1564,7 @@ def main():
         if hasattr(st, "popover"):
             with st.popover("☰"):
                 st.markdown("### ⚙️ Controls")
-                if st.button("🔄 Refresh Dashboard", use_container_width=True, key="menu_refresh"):
+                if st.button("🔄 Refresh Dashboard", width='stretch', key="menu_refresh"):
                     st.rerun()
 
                 auto_refresh = st.checkbox("Auto-refresh (60s)", key="menu_auto_refresh")
@@ -1596,7 +1596,7 @@ def main():
     if not hasattr(st, "popover"):
         with st.expander("Menu", expanded=bool(st.session_state.menu_open)):
             st.markdown("### ⚙️ Controls")
-            if st.button("🔄 Refresh Dashboard", use_container_width=True, key="menu_refresh_fallback"):
+            if st.button("🔄 Refresh Dashboard", width='stretch', key="menu_refresh_fallback"):
                 st.rerun()
 
             auto_refresh = st.checkbox("Auto-refresh (60s)", key="menu_auto_refresh_fallback")
@@ -1784,7 +1784,7 @@ def main():
 
     status_ph.markdown(
         _render_status_strip(
-            utc_hms=datetime.utcnow().strftime('%H:%M:%S'),
+            utc_hms=datetime.now(timezone.utc).strftime('%H:%M:%S'),
             accuracy_text=accuracy_text,
         ),
         unsafe_allow_html=True,
@@ -1868,7 +1868,7 @@ def main():
                     )
                 )
 
-                st.plotly_chart(fig_val, use_container_width=True)
+                st.plotly_chart(fig_val, width='stretch')
 
         # 7-day rolling backtest for the 24H horizon (real historical evaluation, not live tracking)
         st.markdown(
@@ -1926,7 +1926,7 @@ def main():
                     borderwidth=1
                 )
             )
-            st.plotly_chart(fig_bt, use_container_width=True)
+            st.plotly_chart(fig_bt, width='stretch')
         else:
             st.info(
                 "Backtest is temporarily unavailable. This usually resolves after a refresh once enough 1H candles load. "
@@ -2156,7 +2156,7 @@ def main():
             )
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     with col2:
         # Confidence Chart
@@ -2194,7 +2194,7 @@ def main():
             showlegend=False
         )
         
-        st.plotly_chart(fig_conf, use_container_width=True)
+        st.plotly_chart(fig_conf, width='stretch')
     
     # Historical Price Chart (Actual only for now)
     recent = _ensure_datetime_index(price_data).tail(168)  # last 7 days @ 1H
@@ -2239,7 +2239,7 @@ def main():
             )
         )
 
-        st.plotly_chart(fig_historical, use_container_width=True)
+        st.plotly_chart(fig_historical, width='stretch')
         with st.expander("Data diagnostics", expanded=False):
             st.caption(_format_price_data_diagnostics(price_data, current_price=current_price))
         st.caption("Prediction history is being recorded from now. In ~7–8 days we can enable a second line using real stored predictions vs actual.")
