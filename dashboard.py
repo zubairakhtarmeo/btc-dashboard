@@ -28,12 +28,12 @@ from enhanced_predictor import (
     TemporalConvLayer,
 )
 
-# Google Sheets logging (best-effort)
+# Supabase (PostgreSQL) logging - simple and reliable
 try:
-    from gsheets_logger import sync_prediction_log_records, sync_validation_24h_records
-    print("[DASHBOARD] gsheets_logger imported OK")
+    from supabase_logger import sync_prediction_log_records, sync_validation_24h_records
+    print("[DASHBOARD] supabase_logger imported OK")
 except Exception as e:
-    print(f"[DASHBOARD] gsheets import failed: {e}")
+    print(f"[DASHBOARD] supabase import failed: {e}")
     def sync_validation_24h_records(records):
         pass
     def sync_prediction_log_records(records):
