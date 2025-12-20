@@ -49,7 +49,11 @@ openpyxl>=3.0.0
 # Configuration
 python-dotenv>=0.20.0
 
-# Google Sheets logging (optional)
+# Supabase / PostgreSQL logging
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Google Sheets logging (optional - legacy)
 gspread>=6.1.0
 google-auth>=2.0.0
 
