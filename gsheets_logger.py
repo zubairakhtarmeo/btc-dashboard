@@ -128,7 +128,9 @@ def _get_client():
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.file",
+        # drive.file is often insufficient to open an existing spreadsheet by ID;
+        # use full Drive scope so open_by_key works reliably when the sheet is shared.
+        "https://www.googleapis.com/auth/drive",
     ]
 
     # Option A (local/dev): path to service-account JSON file
