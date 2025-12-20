@@ -272,13 +272,20 @@ def _upsert_by_key(
 def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
     """Sync validation_24h.json-style records into Google Sheets (best-effort)."""
     try:
-        if not _is_truthy(_get_setting("GSHEETS_ENABLED", "")):
+        # Always log on every call so we can debug
+        print(f"[GSHEETS] sync_validation_24h_records called with {len(records)} records")
+        
+        enabled_val = _get_setting("GSHEETS_ENABLED", "")
+        print(f"[GSHEETS] GSHEETS_ENABLED = {enabled_val!r}")
+        if not _is_truthy(enabled_val):
+            print("[GSHEETS] DISABLED - set GSHEETS_ENABLED = 'true' in Streamlit secrets")
             return
 
         raw_id = _get_setting("GSHEETS_SPREADSHEET_ID")
+        print(f"[GSHEETS] GSHEETS_SPREADSHEET_ID = {raw_id!r}")
         spreadsheet_id = _normalize_spreadsheet_id(raw_id)
         if not spreadsheet_id:
-            _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
+            print("[GSHEETS] ERROR: spreadsheet_id is empty after normalization")
             return
 
         tab = _get_setting("GSHEETS_VALIDATION_TAB", "validation_24h") or "validation_24h"
@@ -291,35 +298,20 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
             "actual_at",
         ]
 
+        print(f"[GSHEETS] Opening spreadsheet {spreadsheet_id}...")
         spreadsheet = _open_spreadsheet(spreadsheet_id)
+        print(f"[GSHEETS] Spreadsheet opened! Getting worksheet '{tab}'...")
         ws = _ensure_worksheet(spreadsheet, tab, headers)
+        print(f"[GSHEETS] Worksheet ready. Upserting {len(records)} records...")
         appended, updated = _upsert_by_key(ws, headers=headers, key_field="made_at", records=records)
 
-        global _connected_printed
-        if not _connected_printed:
-            email = _client_email_for_logs or "(unknown)"
-            _warn_once(
-                "connected",
-                f"[GSHEETS] Connected OK. spreadsheet_id='{spreadsheet_id}' tab='{tab}' service_account='{email}'",
-            )
-            _connected_printed = True
-
-        # Only log writes when something actually changed.
-        if appended or updated:
-            _warn_once(f"validation_write_{tab}", f"[GSHEETS] validation sync wrote rows (appended={appended}, updated={updated})")
+        email = _client_email_for_logs or "(unknown)"
+        print(f"[GSHEETS] SUCCESS! appended={appended}, updated={updated}, service_account={email}")
     except Exception as e:
-        # Best-effort; never block the dashboard, but DO log once so misconfig is visible.
+        # Best-effort; never block the dashboard, but DO log errors clearly
+        print(f"[GSHEETS] ERROR: {type(e).__name__}: {e}")
         if type(e).__name__ == "SpreadsheetNotFound":
-            _warn_once(
-                "spreadsheet_not_found_hint",
-                "[GSHEETS] SpreadsheetNotFound (404). This usually means the Spreadsheet ID is wrong OR the sheet is not shared with the service account client_email (Google returns 404 when unauthorized).",
-            )
-            email = _client_email_for_logs or "(unknown)"
-            _warn_once(
-                "spreadsheet_not_found_details",
-                f"[GSHEETS] Debug: raw_GSHEETS_SPREADSHEET_ID={raw_id!r} normalized_id='{spreadsheet_id}' service_account='{email}'",
-            )
-        _warn_once("validation_error", f"[GSHEETS] validation sync failed: {type(e).__name__}: {e}")
+            print("[GSHEETS] SpreadsheetNotFound (404) - either wrong ID or not shared with service account")
         return
 
 
