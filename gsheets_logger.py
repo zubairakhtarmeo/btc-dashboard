@@ -94,7 +94,6 @@ def _get_client():
         "https://www.googleapis.com/auth/drive",
     ]
 
-    # Try Streamlit secrets [gcp_service_account]
     try:
         import streamlit as st
         gcp_info = st.secrets.get("gcp_service_account")
@@ -193,11 +192,11 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
 
         headers = ["made_at", "target_at", "predicted_24h", "actual_24h", "actual_at"]
 
-        print(f"[GSHEETS] Opening spreadsheet...")
+        print("[GSHEETS] Opening spreadsheet...")
         spreadsheet = _open_spreadsheet(spreadsheet_id)
-        print(f"[GSHEETS] Opened! Getting worksheet...")
+        print("[GSHEETS] Opened! Getting worksheet...")
         ws = _ensure_worksheet(spreadsheet, "validation_24h", headers)
-        print(f"[GSHEETS] Upserting records...")
+        print("[GSHEETS] Upserting records...")
         appended, updated = _upsert_by_key(ws, headers=headers, key_field="made_at", records=records)
 
         email = _client_email_for_logs or "(unknown)"
