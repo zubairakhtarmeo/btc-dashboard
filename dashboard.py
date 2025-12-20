@@ -979,14 +979,8 @@ def load_model_and_predictor(model_mtime: float, metadata_mtime: float):
         with open(METADATA_PATH, 'rb') as f:
             metadata = pickle.load(f)
         # Import heavy ML dependencies lazily to avoid startup crashes on cloud hosts
-        keras = None
         try:
-            # Ensure TF doesn't try to use GPU
-            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-            os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-            import tensorflow as tf
-            tf.config.set_visible_devices([], 'GPU')
-            keras = tf.keras
+            from tensorflow import keras
             from enhanced_predictor import (
                 EnhancedCryptoPricePredictor,
                 MultiHeadAttentionCustom,
