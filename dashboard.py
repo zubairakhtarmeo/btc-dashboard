@@ -1,3 +1,15 @@
+# Suppress TensorFlow CUDA/GPU warnings on Streamlit Cloud (CPU-only environment)
+# Must be set BEFORE importing anything that triggers TensorFlow/NumPy native libs
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TF logs (INFO/WARNING/ERROR)
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Force CPU-only mode to prevent CUDA init crash
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN optimizations that can cause issues
+
+# Suppress scikit-learn version mismatch warnings
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
+warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
+
 """
 Premium Enterprise-Grade Bitcoin Forecasting Dashboard
 Bloomberg Terminal Style - AI-Powered Multi-Horizon Predictions
@@ -6,7 +18,6 @@ Bloomberg Terminal Style - AI-Powered Multi-Horizon Predictions
 from __future__ import annotations
 
 import json
-import os
 import pickle
 import subprocess
 import sys
