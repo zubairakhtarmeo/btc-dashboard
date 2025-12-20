@@ -2227,7 +2227,6 @@ def main():
             paper_bgcolor=plot_panel_bg,
             plot_bgcolor=plot_panel_bg,
             font=dict(size=11, color=plot_text_color),
-            yaxis=dict(range=[y_min, y_max]),
             margin=dict(t=60, b=40, l=40, r=40),
             legend=dict(
                 orientation='h',
