@@ -146,7 +146,14 @@ class CryptoDataCollector:
         import requests
         ticker = PriceDataCollector._to_binance_symbol_static(symbol)
         url = f"{self.base_url_binance}/ticker/price"
-        response = requests.get(url, params={'symbol': ticker}, timeout=5)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
+        response = requests.get(url, params={'symbol': ticker}, timeout=5, headers=headers)
+        # Skip Binance if blocked (451)
+        if response.status_code == 451:
+            raise Exception("Binance blocked (451)")
         response.raise_for_status()
         return float(response.json()['price'])
     
@@ -251,8 +258,9 @@ class PriceDataCollector:
             try:
                 closes = cached_data['close'] if isinstance(cached_data, pd.DataFrame) and 'close' in cached_data.columns else None
                 if closes is not None:
+                    closes_num = pd.to_numeric(closes, errors='coerce').dropna()
                     # If cached data is nearly constant, it's likely synthetic/clipped fallback; refetch instead.
-                    if closes.nunique(dropna=True) <= 3 or float(closes.std(skipna=True)) < 1e-6:
+                    if closes_num.nunique(dropna=True) <= 3 or float(closes_num.std(skipna=True)) < 1e-6:
                         logger.warning(f"Cached price data for {symbol} looks flat; ignoring cache")
                         # Best-effort: delete the bad cache so we don't keep re-reading it
                         try:
@@ -312,7 +320,17 @@ class PriceDataCollector:
 
             url = f"{self.base_url_binance}/klines"
             params = {'symbol': binance_symbol, 'interval': candle_interval, 'limit': limit}
-            response = requests.get(url, params=params, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+            # Add headers to avoid 451 blocking
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+            response = requests.get(url, params=params, timeout=10, headers=headers)
+            # Handle 451 errors gracefully (geo-blocking)
+            if response.status_code == 451:
+                logger.warning("Binance API returned 451 (blocked), trying alternative...")
+                raise Exception("Binance blocked (451)")
             response.raise_for_status()
             klines = response.json()
             if isinstance(klines, list) and len(klines) > 0:
@@ -450,6 +468,55 @@ class PriceDataCollector:
                         logger.warning("Kraken returned flat/invalid close series; falling back")
         except Exception as e:
             logger.warning(f"Kraken OHLC failed: {e}")
+
+        # Bybit public API fallback (globally accessible, no auth needed)
+        try:
+            if interval == '1h':
+                # Bybit uses different symbol format
+                bybit_symbol = 'BTCUSDT' if symbol.lower() in ('bitcoin', 'btc') else f"{symbol.upper()}USDT"
+                end_time = int(datetime.utcnow().timestamp() * 1000)
+                start_time = int((datetime.utcnow() - timedelta(hours=hours_back)).timestamp() * 1000)
+                
+                url = "https://api.bybit.com/v5/market/kline"
+                params = {
+                    'category': 'spot',
+                    'symbol': bybit_symbol,
+                    'interval': '60',  # 60 minutes
+                    'start': start_time,
+                    'end': end_time,
+                    'limit': min(1000, hours_back),
+                }
+                resp = requests.get(url, params=params, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+                resp.raise_for_status()
+                payload = resp.json()
+                
+                if payload.get('retCode') == 0 and payload.get('result', {}).get('list'):
+                    klines = payload['result']['list']
+                    # Bybit returns: [startTime, open, high, low, close, volume, turnover]
+                    df = pd.DataFrame(
+                        klines,
+                        columns=['time', 'open', 'high', 'low', 'close', 'volume', 'turnover']
+                    )
+                    df['timestamp'] = pd.to_datetime(df['time'].astype(int), unit='ms', utc=True).dt.tz_convert(None)
+                    df = df.set_index('timestamp').sort_index()
+                    for c in ['open', 'high', 'low', 'close', 'volume']:
+                        df[c] = pd.to_numeric(df[c], errors='coerce')
+                    df['market_cap'] = df['close'] * 19e6
+                    df = df[['open', 'high', 'low', 'close', 'volume', 'market_cap']].dropna(subset=['close'])
+                    
+                    if not _is_flat_close(df):
+                        try:
+                            df.attrs = dict(getattr(df, 'attrs', {}) or {})
+                            df.attrs.update({'source': 'Bybit', 'cache_hit': False, 'symbol': symbol, 'interval': interval})
+                        except Exception:
+                            pass
+                        logger.info(f"Collected {len(df)} price records from Bybit for {symbol}")
+                        self._save_to_cache(cache_key, df)
+                        return df
+                    else:
+                        logger.warning("Bybit returned flat/invalid close series; falling back")
+        except Exception as e:
+            logger.warning(f"Bybit API failed: {e}")
         
         # Try multiple free APIs
         try:
@@ -1044,3 +1111,31 @@ if __name__ == "__main__":
                 print(f"  Time range: {df.index.min()} to {df.index.max()}")
         else:
             print(f"\n{data_type.upper()}: No data collected")
+
+    # Persist price data for the dashboard (best-effort)
+    try:
+        price_df = data.get('price')
+        if price_df is not None and isinstance(price_df, pd.DataFrame) and len(price_df) > 0:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            price_path = os.path.join(CACHE_DIR, 'price_data.pkl')
+            price_df.to_pickle(price_path)
+
+            meta_path = os.path.join(CACHE_DIR, 'artifacts_meta.json')
+            meta = {
+                'saved_at_utc': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'),
+                'artifact': 'price_data.pkl',
+                'rows': int(len(price_df)),
+            }
+            try:
+                if isinstance(price_df.index, pd.DatetimeIndex):
+                    meta['start'] = str(price_df.index.min())
+                    meta['end'] = str(price_df.index.max())
+            except Exception:
+                pass
+
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2)
+
+            print(f"\nSaved dashboard history: {price_path}")
+    except Exception as e:
+        print(f"\nWarning: failed to save price_data.pkl: {e}")

@@ -13,6 +13,13 @@ Improvements:
 - Heterogeneous ensemble
 """
 
+import os
+# CRITICAL: Set TensorFlow environment BEFORE importing TensorFlow
+# This prevents CUDA initialization crashes on Streamlit Cloud
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3')
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '-1')
+os.environ.setdefault('TF_ENABLE_ONEDNN_OPTS', '0')
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -25,7 +32,6 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 import pickle
-import os
 
 logger = logging.getLogger(__name__)
 
