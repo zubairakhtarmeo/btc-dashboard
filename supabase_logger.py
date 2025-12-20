@@ -49,6 +49,13 @@ def _get_engine():
     
     try:
         from sqlalchemy import create_engine
+        # Use psycopg (v3) driver instead of psycopg2 for Python 3.13 compatibility
+        # Convert postgres:// to postgresql+psycopg:// for SQLAlchemy
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+psycopg://", 1)
+        elif url.startswith("postgresql://") and "+psycopg" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+        
         _engine = create_engine(url, pool_pre_ping=True, pool_size=2)
         print("[SUPABASE] Database connection established")
         return _engine
