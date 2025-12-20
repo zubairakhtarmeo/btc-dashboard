@@ -28,7 +28,7 @@ from enhanced_predictor import (
     TemporalConvLayer,
 )
 
-# Cloud logging: try JSONBin (simple) first, fall back to nothing
+# Google Sheets logging (best-effort)
 try:
     from gsheets_logger import sync_prediction_log_records, sync_validation_24h_records
     print("[DASHBOARD] gsheets_logger imported OK")
