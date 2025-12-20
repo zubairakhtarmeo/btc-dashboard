@@ -2343,10 +2343,10 @@ def main():
     with st.expander("Live chart (TradingView)", expanded=False):
         st.markdown('<div style="color: var(--dsba-text-2); font-size: 0.85rem; margin: 0.25rem 0 0.75rem 0;">Real-time market data with professional trading tools</div>', unsafe_allow_html=True)
 
-        # Embedded TradingView Widget
-        tv_theme = "dark" if is_dark else "light"
-        tv_bg = "rgba(19, 23, 34, 1)" if is_dark else "rgba(255, 255, 255, 1)"
-        tv_grid = "rgba(42, 46, 57, 0.06)" if is_dark else "rgba(15, 23, 42, 0.08)"
+        # Embedded TradingView Widget (always dark to match our theme)
+        tv_theme = "dark"
+        tv_bg = "rgba(19, 23, 34, 1)"
+        tv_grid = "rgba(42, 46, 57, 0.06)"
 
         tradingview_html = f"""
         <!-- TradingView Widget BEGIN -->
