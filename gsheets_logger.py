@@ -272,7 +272,6 @@ def _upsert_by_key(
 def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
     """Sync validation_24h.json-style records into Google Sheets (best-effort)."""
     try:
-        # Always log on every call so we can debug
         print(f"[GSHEETS] sync_validation_24h_records called with {len(records)} records")
         
         enabled_val = _get_setting("GSHEETS_ENABLED", "")
@@ -308,10 +307,7 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
         email = _client_email_for_logs or "(unknown)"
         print(f"[GSHEETS] SUCCESS! appended={appended}, updated={updated}, service_account={email}")
     except Exception as e:
-        # Best-effort; never block the dashboard, but DO log errors clearly
         print(f"[GSHEETS] ERROR: {type(e).__name__}: {e}")
-        if type(e).__name__ == "SpreadsheetNotFound":
-            print("[GSHEETS] SpreadsheetNotFound (404) - either wrong ID or not shared with service account")
         return
 
 
