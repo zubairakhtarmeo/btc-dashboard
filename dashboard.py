@@ -1652,17 +1652,8 @@ def main():
         st.error("⚠️ Model files not found. Please train the model first using `python train_simple.py`")
         st.stop()
     
-    # Load model
-    with st.spinner("🔄 Loading AI Engine..."):
-        model_mtime = float(MODEL_PATH.stat().st_mtime) if MODEL_PATH.exists() else 0.0
-        metadata_mtime = float(METADATA_PATH.stat().st_mtime) if METADATA_PATH.exists() else 0.0
-        predictor, metadata = load_model_and_predictor(model_mtime, metadata_mtime)
-    
-    if predictor is None:
-        st.error("Failed to load model. Please check the model files.")
-        st.stop()
-    
-    # Fetch live data
+    # IMPORTANT: Fetch data FIRST, before loading TensorFlow
+    # This prevents TensorFlow segfaults when data fetch fails on Streamlit Cloud
     with st.spinner("📡 Fetching Live Market Data..."):
         cached_history_mtime = float(CACHED_PRICE_PATH.stat().st_mtime) if CACHED_PRICE_PATH.exists() else 0.0
         current_price, price_data, error = fetch_live_data(
@@ -1670,8 +1661,26 @@ def main():
             cached_history_mtime,
         )
     
-    if error:
-        st.error(f"⚠️ Failed to fetch live data: {error}")
+    if error or price_data is None or len(price_data) == 0:
+        st.error(f"⚠️ Failed to fetch live data: {error or 'No data returned'}")
+        st.info("The data APIs may be temporarily unavailable. Please try refreshing in a few minutes.")
+        st.stop()
+
+    if current_price is None:
+        try:
+            current_price = float(price_data['close'].iloc[-1])
+        except Exception:
+            st.error("⚠️ Could not determine current price")
+            st.stop()
+    
+    # Now load model (TensorFlow) - data is already available
+    with st.spinner("🔄 Loading AI Engine..."):
+        model_mtime = float(MODEL_PATH.stat().st_mtime) if MODEL_PATH.exists() else 0.0
+        metadata_mtime = float(METADATA_PATH.stat().st_mtime) if METADATA_PATH.exists() else 0.0
+        predictor, metadata = load_model_and_predictor(model_mtime, metadata_mtime)
+    
+    if predictor is None:
+        st.error("Failed to load model. Please check the model files.")
         st.stop()
 
     # Credible performance: compute a 7-day historical backtest for 24H horizon (does not depend on live logs)
