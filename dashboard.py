@@ -28,16 +28,22 @@ from enhanced_predictor import (
     TemporalConvLayer,
 )
 
+print("[DASHBOARD] Starting imports...", flush=True)
+
 # Supabase (PostgreSQL) logging - simple and reliable
 try:
     from supabase_logger import sync_prediction_log_records, sync_validation_24h_records
-    print("[DASHBOARD] supabase_logger imported OK")
+    print("[DASHBOARD] supabase_logger imported OK", flush=True)
 except Exception as e:
-    print(f"[DASHBOARD] supabase import failed: {e}")
+    print(f"[DASHBOARD] supabase import failed: {e}", flush=True)
+    import traceback
+    traceback.print_exc()
     def sync_validation_24h_records(records):
         pass
     def sync_prediction_log_records(records):
         pass
+
+print("[DASHBOARD] Imports complete", flush=True)
 
 # Page config: keep sidebar toggle available and sidebar discoverable by default
 st.set_page_config(
