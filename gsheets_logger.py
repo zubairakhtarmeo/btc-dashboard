@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import json
+import re
 from collections.abc import Mapping
 from typing import Any, Iterable
 
@@ -80,6 +81,25 @@ def _get_setting(name: str, default: str | None = None) -> str | None:
         pass
 
     return default
+
+
+def _normalize_spreadsheet_id(raw: str | None) -> str | None:
+    """Accept either a spreadsheet ID or a full Google Sheets URL."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+
+    # If user pasted the full URL, extract the key between /d/ and the next slash.
+    # Example: https://docs.google.com/spreadsheets/d/<ID>/edit#gid=0
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", s)
+    if m:
+        return m.group(1)
+
+    # Sometimes users paste with quotes; strip again.
+    s = s.strip().strip('"').strip("'").strip()
+    return s or None
 
 
 def _a1_col(n: int) -> str:
@@ -238,7 +258,7 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
         if not _is_truthy(_get_setting("GSHEETS_ENABLED", "")):
             return
 
-        spreadsheet_id = _get_setting("GSHEETS_SPREADSHEET_ID")
+        spreadsheet_id = _normalize_spreadsheet_id(_get_setting("GSHEETS_SPREADSHEET_ID"))
         if not spreadsheet_id:
             _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
             return
@@ -267,6 +287,11 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
             _warn_once(f"validation_write_{tab}", f"[GSHEETS] validation sync wrote rows (appended={appended}, updated={updated})")
     except Exception as e:
         # Best-effort; never block the dashboard, but DO log once so misconfig is visible.
+        if type(e).__name__ == "SpreadsheetNotFound":
+            _warn_once(
+                "spreadsheet_not_found_hint",
+                "[GSHEETS] SpreadsheetNotFound (404). This usually means the Spreadsheet ID is wrong OR the sheet is not shared with the service account client_email (Google returns 404 when unauthorized).",
+            )
         _warn_once("validation_error", f"[GSHEETS] validation sync failed: {type(e).__name__}: {e}")
         return
 
@@ -279,7 +304,7 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
         if not _is_truthy(_get_setting("GSHEETS_SYNC_PREDICTIONS", "")):
             return
 
-        spreadsheet_id = _get_setting("GSHEETS_SPREADSHEET_ID")
+        spreadsheet_id = _normalize_spreadsheet_id(_get_setting("GSHEETS_SPREADSHEET_ID"))
         if not spreadsheet_id:
             _warn_once("missing_spreadsheet_id", "[GSHEETS] Enabled but GSHEETS_SPREADSHEET_ID is missing")
             return
@@ -303,5 +328,10 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
         if appended or updated:
             _warn_once(f"pred_write_{tab}", f"[GSHEETS] prediction sync wrote rows (appended={appended}, updated={updated})")
     except Exception as e:
+        if type(e).__name__ == "SpreadsheetNotFound":
+            _warn_once(
+                "spreadsheet_not_found_hint",
+                "[GSHEETS] SpreadsheetNotFound (404). This usually means the Spreadsheet ID is wrong OR the sheet is not shared with the service account client_email (Google returns 404 when unauthorized).",
+            )
         _warn_once("prediction_error", f"[GSHEETS] prediction sync failed: {type(e).__name__}: {e}")
         return
