@@ -28,16 +28,16 @@ from enhanced_predictor import (
     TemporalConvLayer,
 )
 
+# Cloud logging: try JSONBin (simple) first, fall back to nothing
 try:
     from gsheets_logger import sync_prediction_log_records, sync_validation_24h_records
-    print("[DASHBOARD] gsheets_logger imported successfully")
+    print("[DASHBOARD] gsheets_logger imported OK")
 except Exception as e:
-    print(f"[DASHBOARD] gsheets_logger import FAILED: {e}")
+    print(f"[DASHBOARD] gsheets import failed: {e}")
     def sync_validation_24h_records(records):
-        return
-
+        pass
     def sync_prediction_log_records(records):
-        return
+        pass
 
 # Page config: keep sidebar toggle available and sidebar discoverable by default
 st.set_page_config(
@@ -2312,4 +2312,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
