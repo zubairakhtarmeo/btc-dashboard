@@ -19,14 +19,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
-from tensorflow import keras
 
+# Delay heavy ML imports until needed to avoid native library crashes on startup
 from data_collector import CryptoDataCollector
-from enhanced_predictor import (
-    EnhancedCryptoPricePredictor,
-    MultiHeadAttentionCustom,
-    TemporalConvLayer,
-)
+
 
 print("[DASHBOARD] Starting imports...", flush=True)
 
@@ -973,14 +969,26 @@ def load_model_and_predictor(model_mtime: float, metadata_mtime: float):
     try:
         with open(METADATA_PATH, 'rb') as f:
             metadata = pickle.load(f)
-        
+        # Import heavy ML dependencies lazily to avoid startup crashes on cloud hosts
+        try:
+            from tensorflow import keras
+            from enhanced_predictor import (
+                EnhancedCryptoPricePredictor,
+                MultiHeadAttentionCustom,
+                TemporalConvLayer,
+            )
+        except Exception as e:
+            st.error(f"Failed to import ML dependencies: {e}")
+            return None, None
+
         custom_objects = {
             'TemporalConvLayer': TemporalConvLayer,
             'MultiHeadAttentionCustom': MultiHeadAttentionCustom,
             'mse': keras.losses.MeanSquaredError()
         }
+
         model = keras.models.load_model(str(MODEL_PATH), custom_objects=custom_objects, compile=False)
-        
+
         config = metadata['config']
         predictor = EnhancedCryptoPricePredictor(
             sequence_length=config['sequence_length'],
