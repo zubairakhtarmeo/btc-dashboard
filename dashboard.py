@@ -30,7 +30,9 @@ from enhanced_predictor import (
 
 try:
     from gsheets_logger import sync_prediction_log_records, sync_validation_24h_records
-except Exception:  # Best-effort: Sheets integration must not block the dashboard
+    print("[DASHBOARD] gsheets_logger imported successfully")
+except Exception as e:  # Best-effort: Sheets integration must not block the dashboard
+    print(f"[DASHBOARD] gsheets_logger import FAILED: {e}")
     def sync_validation_24h_records(records):
         return
 
