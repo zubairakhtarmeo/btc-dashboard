@@ -20,7 +20,6 @@ import pickle
 import subprocess
 import sys
 import textwrap
-from decimal import Decimal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,22 +75,6 @@ PREDICTION_LOG_PATH = BASE_DIR / 'cache' / 'prediction_log.json'
 # Optional local artifacts produced by scripts (data_collector.py / feature_engineering.py)
 CACHED_PRICE_PATH = BASE_DIR / 'cache' / 'price_data.pkl'
 CACHED_SIMPLE_FEATURES_PATH = BASE_DIR / 'cache' / 'simple_features.pkl'
-
-
-def _json_default(obj):
-    """JSON serializer for objects that aren't natively serializable (e.g., Decimal from Supabase)."""
-    try:
-        if isinstance(obj, Decimal):
-            return float(obj)
-        if isinstance(obj, (pd.Timestamp, datetime)):
-            return obj.isoformat()
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-    except Exception:
-        pass
-    return str(obj)
 
 
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
@@ -159,7 +142,7 @@ def _save_validation_records(records: list[dict]) -> None:
     try:
         VALIDATION_24H_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(VALIDATION_24H_PATH, 'w', encoding='utf-8') as f:
-            json.dump(records, f, ensure_ascii=False, indent=2, default=_json_default)
+            json.dump(records, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[DASHBOARD] Could not save to local cache: {e}")
     
@@ -311,7 +294,7 @@ def _save_prediction_log(records: list[dict]) -> None:
     try:
         PREDICTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(PREDICTION_LOG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(records, f, ensure_ascii=False, indent=2, default=_json_default)
+            json.dump(records, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[DASHBOARD] Could not save prediction log to local cache: {e}")
     
@@ -2778,3 +2761,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
