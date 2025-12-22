@@ -210,7 +210,6 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
                 r['actual_at'] = pd.to_datetime(actual_ts, utc=True).isoformat()
 
     _save_validation_records(records)
-    sync_validation_24h_records(records)
 
     # Build chart DF from completed records
     rows = []
