@@ -37,7 +37,12 @@ print("[DASHBOARD] Starting imports...", flush=True)
 
 # Supabase (PostgreSQL) logging - simple and reliable
 try:
-    from supabase_logger import sync_prediction_log_records, sync_validation_24h_records
+    from supabase_logger import (
+        sync_prediction_log_records,
+        sync_validation_24h_records,
+        get_validation_history,
+        get_prediction_log_history
+    )
     print("[DASHBOARD] supabase_logger imported OK", flush=True)
 except Exception as e:
     print(f"[DASHBOARD] supabase import failed: {e}", flush=True)
@@ -47,6 +52,10 @@ except Exception as e:
         pass
     def sync_prediction_log_records(records):
         pass
+    def get_validation_history(days=30):
+        return []
+    def get_prediction_log_history(days=7):
+        return []
 
 print("[DASHBOARD] Imports complete", flush=True)
 
@@ -102,25 +111,46 @@ def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_validation_records() -> list[dict]:
+    """Load validation records from Supabase first, fall back to local cache."""
+    # Try loading from Supabase first (survives app restarts)
+    try:
+        db_records = get_validation_history(days=30)
+        if db_records:
+            print(f"[DASHBOARD] Loaded {len(db_records)} validation records from Supabase")
+            return db_records
+    except Exception as e:
+        print(f"[DASHBOARD] Could not load from Supabase: {e}")
+    
+    # Fall back to local file cache
     try:
         if not VALIDATION_24H_PATH.exists():
             return []
         with open(VALIDATION_24H_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, list):
-            return [r for r in data if isinstance(r, dict)]
+            local_records = [r for r in data if isinstance(r, dict)]
+            print(f"[DASHBOARD] Loaded {len(local_records)} validation records from local cache")
+            return local_records
         return []
     except Exception:
         return []
 
 
 def _save_validation_records(records: list[dict]) -> None:
+    """Save to both local cache AND Supabase for redundancy."""
+    # Save to local file cache
     try:
         VALIDATION_24H_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(VALIDATION_24H_PATH, 'w', encoding='utf-8') as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
-    except Exception:
-        return
+    except Exception as e:
+        print(f"[DASHBOARD] Could not save to local cache: {e}")
+    
+    # Also sync to Supabase (happens in background, non-blocking)
+    try:
+        sync_validation_24h_records(records)
+    except Exception as e:
+        print(f"[DASHBOARD] Could not sync to Supabase: {e}")
 
 
 def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tuple[float | None, pd.Timestamp | None]:
@@ -234,25 +264,42 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
 
 
 def _load_prediction_log() -> list[dict]:
+    """Load prediction log from Supabase first, fall back to local cache."""
+    # Try loading from Supabase first (survives app restarts)
+    try:
+        db_records = get_prediction_log_history(days=7)
+        if db_records:
+            print(f"[DASHBOARD] Loaded {len(db_records)} prediction log records from Supabase")
+            return db_records
+    except Exception as e:
+        print(f"[DASHBOARD] Could not load prediction log from Supabase: {e}")
+    
+    # Fall back to local file cache
     try:
         if not PREDICTION_LOG_PATH.exists():
             return []
         with open(PREDICTION_LOG_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, list):
-            return [r for r in data if isinstance(r, dict)]
+            local_records = [r for r in data if isinstance(r, dict)]
+            print(f"[DASHBOARD] Loaded {len(local_records)} prediction log records from local cache")
+            return local_records
         return []
     except Exception:
         return []
 
 
 def _save_prediction_log(records: list[dict]) -> None:
+    """Save to both local cache AND Supabase for redundancy."""
+    # Save to local file cache
     try:
         PREDICTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(PREDICTION_LOG_PATH, 'w', encoding='utf-8') as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
-    except Exception:
-        return
+    except Exception as e:
+        print(f"[DASHBOARD] Could not save prediction log to local cache: {e}")
+    
+    # Supabase sync happens in _append_prediction_log (per new record)
 
 
 def _append_prediction_log(prediction_cards: list[dict], current_price: float) -> None:
