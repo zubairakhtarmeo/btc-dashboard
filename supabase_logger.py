@@ -221,7 +221,46 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
 
 
 def get_validation_history(days: int = 30) -> list[dict]:
-    """Fetch recent validation records."""
+    """Fetch recent validation records from Supabase."""
+    try:
+        engine = _get_engine()
+        if not engine or not _ensure_tables():
+            return []
+        
+        from sqlalchemy import text
+        from datetime import timedelta
+        
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT made_at, target_at, predicted_24h, actual_24h, actual_at
+                FROM validation_24h
+                WHERE made_at > NOW() - INTERVAL :interval
+                ORDER BY made_at DESC
+            """), {"interval": f"{days} days"})
+            
+            records = []
+            for row in result:
+                rec = dict(row._mapping)
+                # Convert datetime objects to ISO strings for JSON compatibility
+                if rec.get('made_at'):
+                    rec['made_at'] = rec['made_at'].isoformat()
+                if rec.get('target_at'):
+                    rec['target_at'] = rec['target_at'].isoformat()
+                if rec.get('actual_at'):
+                    rec['actual_at'] = rec['actual_at'].isoformat()
+                records.append(rec)
+            
+            if records:
+                print(f"[SUPABASE] Loaded {len(records)} validation records from database")
+            return records
+    
+    except Exception as e:
+        print(f"[SUPABASE] fetch validation error: {e}")
+        return []
+
+
+def get_prediction_log_history(days: int = 7) -> list[dict]:
+    """Fetch recent prediction log records from Supabase."""
     try:
         engine = _get_engine()
         if not engine or not _ensure_tables():
@@ -231,14 +270,26 @@ def get_validation_history(days: int = 30) -> list[dict]:
         
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT made_at, target_at, predicted_24h, actual_24h, actual_at
-                FROM validation_24h
-                WHERE made_at > NOW() - INTERVAL ':days days'
-                ORDER BY made_at DESC
-            """), {"days": days})
+                SELECT pk, created_at, target_at, horizon_label, horizon_hours, current_price, predicted_price
+                FROM prediction_log
+                WHERE created_at > NOW() - INTERVAL :interval
+                ORDER BY created_at DESC
+            """), {"interval": f"{days} days"})
             
-            return [dict(row._mapping) for row in result]
+            records = []
+            for row in result:
+                rec = dict(row._mapping)
+                # Convert datetime objects to ISO strings
+                if rec.get('created_at'):
+                    rec['created_at'] = rec['created_at'].isoformat()
+                if rec.get('target_at'):
+                    rec['target_at'] = rec['target_at'].isoformat()
+                records.append(rec)
+            
+            if records:
+                print(f"[SUPABASE] Loaded {len(records)} prediction log records from database")
+            return records
     
     except Exception as e:
-        print(f"[SUPABASE] fetch error: {e}")
+        print(f"[SUPABASE] fetch prediction log error: {e}")
         return []
