@@ -76,8 +76,9 @@ def _ensure_tables():
     
     try:
         from sqlalchemy import text
-        
-        with engine.connect() as conn:
+
+        # Use a transaction so DDL is committed reliably.
+        with engine.begin() as conn:
             # Validation table (24H predictions vs actuals)
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS validation_24h (
@@ -104,8 +105,6 @@ def _ensure_tables():
                     predicted_price NUMERIC
                 )
             """))
-            
-            conn.commit()
         
         _tables_created = True
         print("[SUPABASE] Tables ready")
@@ -133,7 +132,7 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
         inserted = 0
         updated = 0
         
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             for rec in records:
                 made_at = rec.get("made_at")
                 if not made_at:
@@ -160,8 +159,6 @@ def sync_validation_24h_records(records: list[dict[str, Any]]) -> None:
                     inserted += 1
                 else:
                     updated += 1
-            
-            conn.commit()
         
         if inserted or updated:
             print(f"[SUPABASE] validation: inserted={inserted}, updated={updated}")
@@ -187,7 +184,7 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
         
         inserted = 0
         
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             for rec in records:
                 pk = rec.get("pk")
                 if not pk:
@@ -210,8 +207,6 @@ def sync_prediction_log_records(records: list[dict[str, Any]]) -> None:
                 
                 if result.fetchone():
                     inserted += 1
-            
-            conn.commit()
         
         if inserted:
             print(f"[SUPABASE] predictions: inserted={inserted}")
@@ -228,15 +223,14 @@ def get_validation_history(days: int = 30) -> list[dict]:
             return []
         
         from sqlalchemy import text
-        from datetime import timedelta
-        
+
         with engine.connect() as conn:
             result = conn.execute(text("""
                 SELECT made_at, target_at, predicted_24h, actual_24h, actual_at
                 FROM validation_24h
-                WHERE made_at > NOW() - INTERVAL :interval
+                WHERE made_at > NOW() - make_interval(days => :days)
                 ORDER BY made_at DESC
-            """), {"interval": f"{days} days"})
+            """), {"days": int(days)})
             
             records = []
             for row in result:
@@ -272,9 +266,9 @@ def get_prediction_log_history(days: int = 7) -> list[dict]:
             result = conn.execute(text("""
                 SELECT pk, created_at, target_at, horizon_label, horizon_hours, current_price, predicted_price
                 FROM prediction_log
-                WHERE created_at > NOW() - INTERVAL :interval
+                WHERE created_at > NOW() - make_interval(days => :days)
                 ORDER BY created_at DESC
-            """), {"interval": f"{days} days"})
+            """), {"days": int(days)})
             
             records = []
             for row in result:
