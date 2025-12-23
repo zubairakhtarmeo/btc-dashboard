@@ -225,38 +225,40 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
         err = act_f - pred_f  # Actual - Predicted
         err_pct = (abs(err) / act_f * 100.0) if act_f else 0.0
 
-        # Directional Accuracy: compare predicted vs actual direction relative to the price at prediction time.
+        # Price variation: compute absolute percentage variance relative to the prediction.
+        # Variance_i = |actual - predicted| / predicted (use NaN when predicted is zero or invalid)
         baseline = None
         if made_at is not pd.NaT:
             baseline, _ = _nearest_close_at(price_data, made_at)
         baseline_f = float(baseline) if baseline is not None else np.nan
-        pred_dir = np.sign(pred_f - baseline_f) if np.isfinite(baseline_f) else np.nan
-        act_dir = np.sign(act_f - baseline_f) if np.isfinite(baseline_f) else np.nan
-        directional_hit = float(pred_dir == act_dir) if np.isfinite(pred_dir) and np.isfinite(act_dir) else np.nan
+        variance = np.nan
+        if pred_f and np.isfinite(pred_f) and float(pred_f) != 0.0:
+            variance = abs(act_f - pred_f) / float(pred_f)
         rows.append({
             'target_at': target_at,
             'predicted': pred_f,
             'actual': act_f,
             'error': err,
             'baseline': baseline_f,
-            'directional_hit': directional_hit,
+            'abs_pct_variance': variance,
         })
 
     df_chart = (
         pd.DataFrame(rows).sort_values('target_at')
         if rows
-        else pd.DataFrame(columns=['target_at', 'predicted', 'actual', 'error', 'baseline', 'directional_hit'])
+        else pd.DataFrame(columns=['target_at', 'predicted', 'actual', 'error', 'baseline', 'abs_pct_variance'])
     )
 
     # Summary: latest completed record if available, else pending
     summary_html = ''
     if not df_chart.empty:
         last = df_chart.iloc[-1]
-        da = None
+        avg_var = None
         try:
-            da = float(df_chart['directional_hit'].mean() * 100.0)
+            avg_var = float(df_chart['abs_pct_variance'].dropna().mean())
         except Exception:
-            da = None
+            avg_var = None
+        price_acc = float(max(0.0, 100.0 - (avg_var * 100.0))) if avg_var is not None else None
         summary_html = (
             "<div style='margin-top: 1rem; padding: 1rem; border-radius: 12px; background: var(--dsba-surface-glass); border: 1px solid var(--dsba-border);'>"
             "<div style='color: var(--dsba-accent); font-size: 0.85rem; font-weight: 700; margin-bottom: 0.5rem;'>📊 Last 24H Validation</div>"
@@ -264,7 +266,7 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
             f"<span>Predicted: <b style='color: var(--dsba-text);'>${last['predicted']:,.0f}</b></span>"
             f"<span>Actual: <b style='color: var(--dsba-text);'>${last['actual']:,.0f}</b></span>"
             f"<span>Error: <b style='color: {'var(--dsba-positive)' if last['error'] >= 0 else 'var(--dsba-negative)'};'>{last['error']:+,.0f}</b></span>"
-            f"<span>Directional Accuracy (%): <b style='color: var(--dsba-accent);'>{da:.1f}%</b></span>" if da is not None else "<span>Directional Accuracy (%): <b style='color: var(--dsba-accent);'>n/a</b></span>"
+            f"<span>Price Accuracy (%): <b style='color: var(--dsba-accent);'>{price_acc:.1f}%</b></span>" if price_acc is not None else "<span>Price Accuracy (%): <b style='color: var(--dsba-accent);'>n/a</b></span>"
             "</div>"
             "</div>"
         )
@@ -429,9 +431,14 @@ def _build_recent_predicted_vs_actual_from_log(
             except Exception:
                 baseline_f = np.nan
 
-            pred_dir = np.sign(float(predicted_price) - baseline_f) if np.isfinite(baseline_f) else np.nan
-            act_dir = np.sign(float(actual_price) - baseline_f) if np.isfinite(baseline_f) else np.nan
-            directional_hit = float(pred_dir == act_dir) if np.isfinite(pred_dir) and np.isfinite(act_dir) else np.nan
+            # Compute absolute percentage variance relative to predicted price
+            variance = np.nan
+            try:
+                p = float(predicted_price)
+                if p != 0.0 and np.isfinite(p):
+                    variance = abs(float(actual_price) - p) / p
+            except Exception:
+                variance = np.nan
 
             rows.append({
                 'created_at': created_at,
@@ -442,7 +449,7 @@ def _build_recent_predicted_vs_actual_from_log(
                 'error': error,
                 'error_pct': error_pct,
                 'baseline': baseline_f,
-                'directional_hit': directional_hit,
+                'abs_pct_variance': variance,
             })
 
         if not rows:
@@ -1653,10 +1660,19 @@ def compute_historical_backtest(
 
 
 def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, float | None]:
-    """Return (n, median_abs_pct_error, directional_accuracy_pct).
+    """Return (n, median_abs_pct_error, price_accuracy_pct).
 
-    Directional Accuracy is the hit rate of predicting the correct direction (up/down/flat)
-    relative to a baseline price at the prediction time.
+    Price Accuracy (%) represents average percentage closeness between predicted and actual prices.
+
+    For each sample i:
+        variance_i = |actual_i - predicted_i| / predicted_i
+    Avg Variance = mean(variance_i)
+    Price Accuracy (%) = 100 - (Avg Variance * 100), clamped to a minimum of 0.
+
+    Notes:
+    - Uses absolute values so variance is positive
+    - Predictions with predicted == 0 are ignored to avoid division by zero
+    - Does not change any prediction horizons, charts, or other error metrics
     """
     try:
         if df is None or df.empty:
@@ -1664,56 +1680,29 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         d = df.copy()
         d['predicted'] = pd.to_numeric(d.get('predicted'), errors='coerce')
         d['actual'] = pd.to_numeric(d.get('actual'), errors='coerce')
-        # Baseline can be provided directly (e.g., live validation / prediction log).
-        if 'baseline' in d.columns:
-            d['baseline'] = pd.to_numeric(d.get('baseline'), errors='coerce')
-        d = d.dropna(subset=['predicted', 'actual', 'baseline'] if 'baseline' in d.columns else ['predicted', 'actual'])
+        d = d.dropna(subset=['predicted', 'actual'])
         if d.empty:
             return 0, None, None
 
-        # If baseline isn't provided, derive it by matching the actual at (target_at - horizon_hours)
-        # inside this same backtest/validation series.
-        if 'baseline' not in d.columns:
-            if 'target_at' not in d.columns:
-                return 0, None, None
-            d['target_at'] = pd.to_datetime(d.get('target_at'), utc=True, errors='coerce')
-            d = d.dropna(subset=['target_at']).sort_values('target_at')
-            if d.empty:
-                return 0, None, None
-
-            # This function is only used for the 24H backtest/live validation in this dashboard.
-            horizon_hours = 24
-            baseline_at = d['target_at'] - pd.Timedelta(hours=int(horizon_hours))
-            actual_lookup = d[['target_at', 'actual']].rename(columns={'target_at': 'ts', 'actual': 'baseline'})
-            left = pd.DataFrame({'row_id': np.arange(len(d), dtype=int), 'baseline_at': baseline_at})
-            left_sorted = left.sort_values('baseline_at')
-            right = actual_lookup.sort_values('ts')
-            merged = pd.merge_asof(
-                left_sorted,
-                right,
-                left_on='baseline_at',
-                right_on='ts',
-                direction='backward',
-                tolerance=pd.Timedelta(hours=2),
-            ).sort_values('row_id')
-            d = d.reset_index(drop=True)
-            d['baseline'] = merged['baseline'].to_numpy()
-            d['baseline'] = pd.to_numeric(d['baseline'], errors='coerce')
-            d = d.dropna(subset=['baseline'])
-            if d.empty:
-                return 0, None, None
-
-        pred_dir = np.sign(d['predicted'] - d['baseline'])
-        act_dir = np.sign(d['actual'] - d['baseline'])
-        dir_mask = pred_dir.notna() & act_dir.notna()
-        if not bool(dir_mask.any()):
-            return 0, None, None
-        directional_acc = float((pred_dir[dir_mask] == act_dir[dir_mask]).mean() * 100.0)
-
+        # Median Absolute Percentage Error (unchanged; actual as denominator)
         ape = (np.abs(d['actual'] - d['predicted']) / np.abs(d['actual']).replace(0, np.nan)) * 100.0
         ape = ape.replace([np.inf, -np.inf], np.nan).dropna()
         median_ape = float(np.nanmedian(ape.values)) if not ape.empty else None
-        return int(dir_mask.sum()), median_ape, directional_acc
+
+        # Compute per-sample variance relative to prediction (predicted as denominator)
+        valid_mask = d['predicted'].notna() & np.isfinite(d['predicted']) & (d['predicted'] != 0)
+        if not bool(valid_mask.any()):
+            # No valid entries to compute price accuracy
+            return int(valid_mask.sum()), median_ape, None
+
+        var = (np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / d.loc[valid_mask, 'predicted'])
+        var = var.replace([np.inf, -np.inf], np.nan).dropna()
+        if var.empty:
+            return int(valid_mask.sum()), median_ape, None
+
+        avg_var = float(var.mean())
+        price_accuracy = max(0.0, 100.0 - (avg_var * 100.0))
+        return int(valid_mask.sum()), median_ape, float(price_accuracy)
     except Exception:
         return 0, None, None
 
@@ -1971,7 +1960,7 @@ def main():
     status_ph.markdown(
         _render_status_strip(
             utc_hms=datetime.now(timezone.utc).strftime('%H:%M:%S'),
-            accuracy_text="Directional Accuracy (%): calculating…",
+            accuracy_text="Price Accuracy (%): calculating…",
         ),
         unsafe_allow_html=True,
     )
@@ -2096,7 +2085,7 @@ def main():
     # Credible performance: compute a 7-day historical backtest for 24H horizon (does not depend on live logs)
     bt24 = pd.DataFrame()
     backtest_err: str | None = None
-    backtest_text = "24H Backtest 7D (Directional Accuracy): unavailable"
+    backtest_text = "24H Backtest 7D (Price Accuracy %): unavailable"
     backtest_acc = None
     backtest_n = 0
     try:
@@ -2105,11 +2094,11 @@ def main():
         backtest_n = int(n_bt)
         backtest_acc = acc_bt
         if n_bt > 0 and acc_bt is not None:
-            backtest_text = f"24H Backtest 7D (Directional Accuracy): {acc_bt:.1f}% (N={n_bt})"
+            backtest_text = f"24H Backtest 7D (Price Accuracy %): {acc_bt:.1f}% (N={n_bt})"
         elif n_bt > 0:
-            backtest_text = f"24H Backtest 7D (Directional Accuracy): collecting (N={n_bt})"
+            backtest_text = f"24H Backtest 7D (Price Accuracy %): collecting (N={n_bt})"
     except Exception as e:
-        backtest_text = "24H Backtest 7D (Directional Accuracy): unavailable"
+        backtest_text = "24H Backtest 7D (Price Accuracy %): unavailable"
         backtest_acc = None
         backtest_n = 0
         backtest_err = str(e)
@@ -2220,15 +2209,15 @@ def main():
         live_n = 0
 
     # Prominent headline: prefer live only when it has enough samples; otherwise use backtest.
-    accuracy_text = "Directional Accuracy (%): collecting"
+    accuracy_text = "Price Accuracy (%): collecting"
     if live_n >= 24 and live_acc is not None:
-        accuracy_text = f"Directional Accuracy (%) (24H Live): {live_acc:.1f}% (N={live_n})"
+        accuracy_text = f"Price Accuracy (%) (24H Live): {live_acc:.1f}% (N={live_n})"
     elif backtest_n > 0 and backtest_acc is not None:
-        accuracy_text = f"Directional Accuracy (%) (24H Backtest 7D): {backtest_acc:.1f}% (N={backtest_n})"
+        accuracy_text = f"Price Accuracy (%) (24H Backtest 7D): {backtest_acc:.1f}% (N={backtest_n})"
     elif backtest_n > 0:
-        accuracy_text = f"Directional Accuracy (%) (Backtest 7D): collecting (N={backtest_n})"
+        accuracy_text = f"Price Accuracy (%) (Backtest 7D): collecting (N={backtest_n})"
     else:
-        accuracy_text = "Directional Accuracy (%): collecting"
+        accuracy_text = "Price Accuracy (%): collecting"
 
     status_ph.markdown(
         _render_status_strip(
@@ -2341,7 +2330,7 @@ def main():
         if isinstance(bt24, pd.DataFrame) and not bt24.empty:
             n_bt, med_ape_bt, acc_bt = _accuracy_from_pred_actual_df(bt24)
             st.caption(
-                f"Backtest uses historical candles to evaluate your model. Directional Accuracy (%) is hit rate; Median Abs % Error is an error metric. (N={n_bt})"
+                f"Backtest uses historical candles to evaluate your model. Price Accuracy (%) represents average percentage closeness; Median Abs % Error is an error metric. (N={n_bt})"
             )
 
             fig_bt = go.Figure()
@@ -2362,7 +2351,7 @@ def main():
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
 
-            title_suffix = f" • Directional Accuracy: {acc_bt:.1f}%" if acc_bt is not None else ""
+            title_suffix = f" • Price Accuracy: {acc_bt:.1f}%" if acc_bt is not None else ""
             fig_bt.update_layout(
                 title=dict(
                     text=f"24H Backtest (7D): Predicted vs Actual{title_suffix}",
