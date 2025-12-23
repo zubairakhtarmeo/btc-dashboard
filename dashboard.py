@@ -170,7 +170,8 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
 
         actual_ts = df.index[idx]
         # Sanity tolerance: if the closest prior candle is too far away, treat as missing.
-        if (target_ts - actual_ts) > pd.Timedelta(hours=2):
+        # Increased tolerance to 6 hours to handle API data gaps
+        if (target_ts - actual_ts) > pd.Timedelta(hours=6):
             return None, None
         actual_price = float(df['close'].iloc[idx])
         return actual_price, actual_ts
