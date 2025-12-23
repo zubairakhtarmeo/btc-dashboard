@@ -242,6 +242,11 @@ def get_validation_history(days: int = 30) -> list[dict]:
                     rec['target_at'] = rec['target_at'].isoformat()
                 if rec.get('actual_at'):
                     rec['actual_at'] = rec['actual_at'].isoformat()
+                # Convert Decimal to float for JSON serialization
+                if rec.get('predicted_24h') is not None:
+                    rec['predicted_24h'] = float(rec['predicted_24h'])
+                if rec.get('actual_24h') is not None:
+                    rec['actual_24h'] = float(rec['actual_24h'])
                 records.append(rec)
             
             if records:
@@ -278,6 +283,11 @@ def get_prediction_log_history(days: int = 7) -> list[dict]:
                     rec['created_at'] = rec['created_at'].isoformat()
                 if rec.get('target_at'):
                     rec['target_at'] = rec['target_at'].isoformat()
+                # Convert Decimal to float for JSON serialization
+                if rec.get('current_price') is not None:
+                    rec['current_price'] = float(rec['current_price'])
+                if rec.get('predicted_price') is not None:
+                    rec['predicted_price'] = float(rec['predicted_price'])
                 records.append(rec)
             
             if records:
@@ -287,3 +297,33 @@ def get_prediction_log_history(days: int = 7) -> list[dict]:
     except Exception as e:
         print(f"[SUPABASE] fetch prediction log error: {e}")
         return []
+
+
+def cleanup_bad_validation_records() -> int:
+    """Delete validation records with unrealistic predicted values (likely scaling bugs).
+    Returns count of deleted records.
+    """
+    try:
+        engine = _get_engine()
+        if not engine or not _ensure_tables():
+            return 0
+        
+        from sqlalchemy import text
+        
+        with engine.begin() as conn:
+            # Delete records where predicted_24h is clearly wrong (not in realistic BTC price range)
+            result = conn.execute(text("""
+                DELETE FROM validation_24h
+                WHERE predicted_24h IS NOT NULL 
+                AND (predicted_24h > 200000 OR predicted_24h < 10000)
+                RETURNING id
+            """))
+            
+            deleted_count = len(result.fetchall())
+            if deleted_count > 0:
+                print(f"[SUPABASE] Cleaned up {deleted_count} bad validation records")
+            return deleted_count
+    
+    except Exception as e:
+        print(f"[SUPABASE] cleanup error: {e}")
+        return 0
