@@ -31,6 +31,7 @@ import streamlit.components.v1 as components
 
 # Delay heavy ML imports until needed to avoid native library crashes on startup
 from data_collector import CryptoDataCollector
+from config import Config
 
 
 print("[DASHBOARD] Starting imports...", flush=True)
@@ -225,40 +226,44 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
         err = act_f - pred_f  # Actual - Predicted
         err_pct = (abs(err) / act_f * 100.0) if act_f else 0.0
 
-        # Price variation: compute absolute percentage variance relative to the prediction.
-        # Variance_i = |actual - predicted| / predicted (use NaN when predicted is zero or invalid)
+        # Absolute percentage error relative to actual (use NaN when actual is zero or invalid)
         baseline = None
         if made_at is not pd.NaT:
             baseline, _ = _nearest_close_at(price_data, made_at)
         baseline_f = float(baseline) if baseline is not None else np.nan
-        variance = np.nan
-        if pred_f and np.isfinite(pred_f) and float(pred_f) != 0.0:
-            variance = abs(act_f - pred_f) / float(pred_f)
+        abs_pct_error = np.nan
+        if act_f and np.isfinite(act_f) and float(act_f) != 0.0:
+            abs_pct_error = abs(act_f - pred_f) / float(act_f) * 100.0
         rows.append({
             'target_at': target_at,
             'predicted': pred_f,
             'actual': act_f,
             'error': err,
             'baseline': baseline_f,
-            'abs_pct_variance': variance,
+            'abs_pct_error': abs_pct_error,
         })
 
     df_chart = (
         pd.DataFrame(rows).sort_values('target_at')
         if rows
-        else pd.DataFrame(columns=['target_at', 'predicted', 'actual', 'error', 'baseline', 'abs_pct_variance'])
+        else pd.DataFrame(columns=['target_at', 'predicted', 'actual', 'error', 'baseline', 'abs_pct_error'])
     )
 
     # Summary: latest completed record if available, else pending
     summary_html = ''
     if not df_chart.empty:
         last = df_chart.iloc[-1]
-        avg_var = None
+        tol = float(Config.METRICS.get('tolerance_pct', 2.0))
+        # Count entries with abs_pct_error <= tol
         try:
-            avg_var = float(df_chart['abs_pct_variance'].dropna().mean())
+            valid = df_chart['abs_pct_error'].dropna()
+            n_valid = int(len(valid))
+            n_within = int((valid <= float(tol)).sum())
+            acc_pct = float(100.0 * n_within / n_valid) if n_valid > 0 else None
         except Exception:
-            avg_var = None
-        price_acc = float(max(0.0, 100.0 - (avg_var * 100.0))) if avg_var is not None else None
+            n_valid = 0
+            n_within = 0
+            acc_pct = None
         summary_html = (
             "<div style='margin-top: 1rem; padding: 1rem; border-radius: 12px; background: var(--dsba-surface-glass); border: 1px solid var(--dsba-border);'>"
             "<div style='color: var(--dsba-accent); font-size: 0.85rem; font-weight: 700; margin-bottom: 0.5rem;'>📊 Last 24H Validation</div>"
@@ -266,7 +271,7 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
             f"<span>Predicted: <b style='color: var(--dsba-text);'>${last['predicted']:,.0f}</b></span>"
             f"<span>Actual: <b style='color: var(--dsba-text);'>${last['actual']:,.0f}</b></span>"
             f"<span>Error: <b style='color: {'var(--dsba-positive)' if last['error'] >= 0 else 'var(--dsba-negative)'};'>{last['error']:+,.0f}</b></span>"
-            f"<span>Price Accuracy (%): <b style='color: var(--dsba-accent);'>{price_acc:.1f}%</b></span>" if price_acc is not None else "<span>Price Accuracy (%): <b style='color: var(--dsba-accent);'>n/a</b></span>"
+            f"<span>Price Accuracy (±{tol:.0f}%): <b style='color: var(--dsba-accent);'>{acc_pct:.1f}%</b></span>" if acc_pct is not None else f"<span>Price Accuracy (±{tol:.0f}%): <b style='color: var(--dsba-accent);'>n/a</b></span>"
             "</div>"
             "</div>"
         )
@@ -431,14 +436,14 @@ def _build_recent_predicted_vs_actual_from_log(
             except Exception:
                 baseline_f = np.nan
 
-            # Compute absolute percentage variance relative to predicted price
-            variance = np.nan
+            # Compute absolute percentage error relative to actual price
+            abs_pct_error = np.nan
             try:
-                p = float(predicted_price)
-                if p != 0.0 and np.isfinite(p):
-                    variance = abs(float(actual_price) - p) / p
+                a = float(actual_price)
+                if a != 0.0 and np.isfinite(a):
+                    abs_pct_error = abs(float(actual_price) - float(predicted_price)) / a * 100.0
             except Exception:
-                variance = np.nan
+                abs_pct_error = np.nan
 
             rows.append({
                 'created_at': created_at,
@@ -449,7 +454,7 @@ def _build_recent_predicted_vs_actual_from_log(
                 'error': error,
                 'error_pct': error_pct,
                 'baseline': baseline_f,
-                'abs_pct_variance': variance,
+                'abs_pct_error': abs_pct_error,
             })
 
         if not rows:
@@ -1660,19 +1665,17 @@ def compute_historical_backtest(
 
 
 def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, float | None]:
-    """Return (n, median_abs_pct_error, price_accuracy_pct).
+    """Return (n, median_abs_pct_error, tolerance_accuracy_pct).
 
-    Price Accuracy (%) represents average percentage closeness between predicted and actual prices.
+    Tolerance-Based Price Accuracy (±k%) measures proportion of predictions whose
+    absolute percentage error relative to actual is within ±k%.
 
     For each sample i:
-        variance_i = |actual_i - predicted_i| / predicted_i
-    Avg Variance = mean(variance_i)
-    Price Accuracy (%) = 100 - (Avg Variance * 100), clamped to a minimum of 0.
+        Error_i = |actual_i - predicted_i| / |actual_i| * 100
+    A prediction is correct if Error_i <= k (tolerance in percent)
+    Accuracy = 100 * (number_correct / N)
 
-    Notes:
-    - Uses absolute values so variance is positive
-    - Predictions with predicted == 0 are ignored to avoid division by zero
-    - Does not change any prediction horizons, charts, or other error metrics
+    The tolerance k is read from `Config.METRICS['tolerance_pct']` (default 2.0).
     """
     try:
         if df is None or df.empty:
@@ -1689,20 +1692,21 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         ape = ape.replace([np.inf, -np.inf], np.nan).dropna()
         median_ape = float(np.nanmedian(ape.values)) if not ape.empty else None
 
-        # Compute per-sample variance relative to prediction (predicted as denominator)
-        valid_mask = d['predicted'].notna() & np.isfinite(d['predicted']) & (d['predicted'] != 0)
+        # Tolerance-based accuracy: compute error_i relative to actual
+        tol = float(Config.METRICS.get('tolerance_pct', 2.0))
+        valid_mask = d['actual'].notna() & np.isfinite(d['actual']) & (d['actual'] != 0)
         if not bool(valid_mask.any()):
-            # No valid entries to compute price accuracy
             return int(valid_mask.sum()), median_ape, None
 
-        var = (np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / d.loc[valid_mask, 'predicted'])
-        var = var.replace([np.inf, -np.inf], np.nan).dropna()
-        if var.empty:
+        errors = (np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / np.abs(d.loc[valid_mask, 'actual'])) * 100.0
+        errors = errors.replace([np.inf, -np.inf], np.nan).dropna()
+        if errors.empty:
             return int(valid_mask.sum()), median_ape, None
 
-        avg_var = float(var.mean())
-        price_accuracy = max(0.0, 100.0 - (avg_var * 100.0))
-        return int(valid_mask.sum()), median_ape, float(price_accuracy)
+        n_valid = int(len(errors))
+        n_within = int((errors <= tol).sum())
+        accuracy_pct = float(100.0 * n_within / n_valid)
+        return n_valid, median_ape, float(accuracy_pct)
     except Exception:
         return 0, None, None
 
@@ -1957,10 +1961,11 @@ def _render_run_scripts_section() -> None:
 def main():
     # Thin status strip (essentials first) — update once metrics are available
     status_ph = st.empty()
+    tol_default = float(Config.METRICS.get('tolerance_pct', 2.0))
     status_ph.markdown(
         _render_status_strip(
             utc_hms=datetime.now(timezone.utc).strftime('%H:%M:%S'),
-            accuracy_text="Price Accuracy (%): calculating…",
+            accuracy_text=f"Price Accuracy (±{tol_default:.0f}%): calculating…",
         ),
         unsafe_allow_html=True,
     )
@@ -2190,6 +2195,7 @@ def main():
         validation_summary_html, validation_chart_df = _update_24h_validation(price_data, float(pred_24h_price))
 
     # Update status strip with reliable metrics (live 24H only once it has enough real samples)
+    tol = float(Config.METRICS.get('tolerance_pct', 2.0))
     live_text = "24H Live: collecting (N=0)"
     live_acc = None
     live_n = 0
@@ -2209,15 +2215,15 @@ def main():
         live_n = 0
 
     # Prominent headline: prefer live only when it has enough samples; otherwise use backtest.
-    accuracy_text = "Price Accuracy (%): collecting"
+    accuracy_text = f"Price Accuracy (±{tol:.0f}%): collecting"
     if live_n >= 24 and live_acc is not None:
-        accuracy_text = f"Price Accuracy (%) (24H Live): {live_acc:.1f}% (N={live_n})"
+        accuracy_text = f"Price Accuracy (±{tol:.0f}%) (24H Live): {live_acc:.1f}% (N={live_n})"
     elif backtest_n > 0 and backtest_acc is not None:
-        accuracy_text = f"Price Accuracy (%) (24H Backtest 7D): {backtest_acc:.1f}% (N={backtest_n})"
+        accuracy_text = f"Price Accuracy (±{tol:.0f}%) (24H Backtest 7D): {backtest_acc:.1f}% (N={backtest_n})"
     elif backtest_n > 0:
-        accuracy_text = f"Price Accuracy (%) (Backtest 7D): collecting (N={backtest_n})"
+        accuracy_text = f"Price Accuracy (±{tol:.0f}%): collecting (N={backtest_n})"
     else:
-        accuracy_text = "Price Accuracy (%): collecting"
+        accuracy_text = f"Price Accuracy (±{tol:.0f}%): collecting"
 
     status_ph.markdown(
         _render_status_strip(
@@ -2330,7 +2336,7 @@ def main():
         if isinstance(bt24, pd.DataFrame) and not bt24.empty:
             n_bt, med_ape_bt, acc_bt = _accuracy_from_pred_actual_df(bt24)
             st.caption(
-                f"Backtest uses historical candles to evaluate your model. Price Accuracy (%) represents average percentage closeness; Median Abs % Error is an error metric. (N={n_bt})"
+                f"Backtest uses historical candles to evaluate your model. Price Accuracy (±{Config.METRICS.get('tolerance_pct', 2.0):.0f}%) counts predictions within ±{Config.METRICS.get('tolerance_pct', 2.0):.0f}% of actual; Median Abs % Error is an error metric. (N={n_bt})"
             )
 
             fig_bt = go.Figure()
