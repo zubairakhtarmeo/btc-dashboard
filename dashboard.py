@@ -163,6 +163,10 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
             print(f"[DEBUG] _nearest_close_at: no close column or empty df", flush=True)
             return None, None
 
+        # Remove duplicate timestamps (keep last occurrence)
+        if df.index.duplicated().any():
+            df = df[~df.index.duplicated(keep='last')]
+
         target_ts = pd.to_datetime(target_ts, utc=True)
 
         # Use the last known close at-or-before target time (prevents accidental future lookup).
