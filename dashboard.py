@@ -41,13 +41,16 @@ try:
         sync_prediction_log_records,
         sync_validation_24h_records,
         get_validation_history,
-        get_prediction_log_history
+        get_prediction_log_history,
+        cleanup_bad_validation_records
     )
     print("[DASHBOARD] supabase_logger imported OK", flush=True)
 except Exception as e:
     print(f"[DASHBOARD] supabase import failed: {e}", flush=True)
     import traceback
     traceback.print_exc()
+    def cleanup_bad_validation_records():
+        return 0
     def sync_validation_24h_records(records):
         pass
     def sync_prediction_log_records(records):
@@ -141,8 +144,16 @@ def _save_validation_records(records: list[dict]) -> None:
     # Save to local file cache
     try:
         VALIDATION_24H_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Convert Decimal to float for JSON serialization
+        records_serializable = []
+        for r in records:
+            r_copy = dict(r)
+            for key in ['predicted_24h', 'actual_24h']:
+                if r_copy.get(key) is not None:
+                    r_copy[key] = float(r_copy[key])
+            records_serializable.append(r_copy)
         with open(VALIDATION_24H_PATH, 'w', encoding='utf-8') as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
+            json.dump(records_serializable, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[DASHBOARD] Could not save to local cache: {e}")
     
@@ -201,7 +212,6 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
 
     # Create a record for this hour if missing
     if not any(pd.to_datetime(r.get('made_at'), utc=True, errors='coerce') == now_utc for r in records):
-        print(f"[DEBUG] Creating new validation record: predicted_24h={predicted_24h}, current_price should be ~89k", flush=True)
         records.append({
             'made_at': now_utc.isoformat(),
             'target_at': target_utc.isoformat(),
@@ -333,8 +343,16 @@ def _save_prediction_log(records: list[dict]) -> None:
     # Save to local file cache
     try:
         PREDICTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Convert Decimal to float for JSON serialization
+        records_serializable = []
+        for r in records:
+            r_copy = dict(r)
+            for key in ['current_price', 'predicted_price']:
+                if r_copy.get(key) is not None:
+                    r_copy[key] = float(r_copy[key])
+            records_serializable.append(r_copy)
         with open(PREDICTION_LOG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
+            json.dump(records_serializable, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[DASHBOARD] Could not save prediction log to local cache: {e}")
     
@@ -2104,6 +2122,14 @@ def main():
                 print(f"[DASHBOARD] Dec 22-23 candles: {list(dec22_candles.index[:20])}", flush=True)
     except Exception as e:
         print(f"[DASHBOARD] Debug logging error: {e}", flush=True)
+    
+    # Clean up any bad validation records from previous scaling bugs (one-time cleanup)
+    try:
+        deleted = cleanup_bad_validation_records()
+        if deleted > 0:
+            print(f"[DASHBOARD] Cleaned {deleted} bad validation records on startup", flush=True)
+    except Exception as e:
+        print(f"[DASHBOARD] Cleanup error: {e}", flush=True)
 
     if current_price is None:
         try:
@@ -2208,15 +2234,7 @@ def main():
         if isinstance(pred_scaled, np.ndarray):
             pred_scaled = float(pred_scaled.flatten()[0])
         
-        # DEBUG: Check if pred_scaled is already in real units (not scaled)
-        if label == '24H':
-            print(f"[DEBUG] 24H pred_scaled={pred_scaled}, current_price={current_price}", flush=True)
-        
         pred_price = predictor.price_scaler.inverse_transform([[pred_scaled]])[0, 0]
-        
-        # DEBUG: Check inverse transform result
-        if label == '24H':
-            print(f"[DEBUG] 24H pred_price after inverse_transform={pred_price}", flush=True)
         
         if hasattr(predictor.price_scaler, 'scale_'):
             pred_std_price = float(pred_std_scaled.flatten()[0]) * predictor.price_scaler.scale_[0]
@@ -2235,7 +2253,6 @@ def main():
     validation_summary_html = ''
     validation_chart_df = pd.DataFrame()
     if pred_24h_price is not None:
-        print(f"[DEBUG] Passing pred_24h_price to validation: {pred_24h_price}", flush=True)
         validation_summary_html, validation_chart_df = _update_24h_validation(price_data, float(pred_24h_price))
 
     # Update status strip with reliable metrics (live 24H only once it has enough real samples)
