@@ -1729,14 +1729,18 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         ape = ape.replace([np.inf, -np.inf], np.nan).dropna()
         median_ape = float(np.nanmedian(ape.values)) if not ape.empty else None
 
-        # Variance-based accuracy: Variance_i = |Actual_i - Predicted_i| / Predicted_i
+        # Variance-based accuracy per user specification:
+        # Variance_i = (Actual_i - Predicted_i) / Predicted_i  (note: NOT absolute value here)
+        # Average Variance = Sum of all Variance_i / N
+        # Accuracy = 100 - (Average Variance × 100)
         valid_mask = d['predicted'].notna() & np.isfinite(d['predicted']) & (d['predicted'] != 0)
         if not bool(valid_mask.any()):
             # No valid entries to compute variance-based accuracy
             return int(valid_mask.sum()), median_ape, None
 
-        # Calculate variance for each prediction (always positive)
-        variances = np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / np.abs(d.loc[valid_mask, 'predicted'])
+        # Calculate variance for each prediction per user formula
+        # Variance = (Actual - Predicted) / Predicted (NOT absolute in numerator)
+        variances = (d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / d.loc[valid_mask, 'predicted']
         variances = variances.replace([np.inf, -np.inf], np.nan).dropna()
         if variances.empty:
             return int(valid_mask.sum()), median_ape, None
@@ -1744,8 +1748,9 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         # Average variance across all predictions
         avg_variance = float(variances.mean())
         
-        # Accuracy = 100 - (Avg Variance × 100), clamped to minimum of 0
-        accuracy = max(0.0, 100.0 - (avg_variance * 100.0))
+        # Accuracy = 100 - (Avg Variance × 100)
+        # Don't clamp - can be negative if model consistently over/under predicts
+        accuracy = 100.0 - (avg_variance * 100.0)
         
         return int(len(variances)), median_ape, float(accuracy)
     except Exception:
@@ -2265,8 +2270,10 @@ def main():
         )
         live_n = int(n_live)
         live_acc = acc_live
-        if n_live >= 24 and acc_live is not None:
-            live_text = f"24H Live: {acc_live:.1f}% (N={n_live})"
+        if n_live >= 1 and acc_live is not None:
+            # Show live accuracy immediately, add 'preliminary' label if N < 30
+            label = "preliminary" if n_live < 30 else ""
+            live_text = f"24H Live: {acc_live:.1f}% (N={n_live}{', ' + label if label else ''})"
         else:
             live_text = f"24H Live: collecting (N={n_live})"
     except Exception:
@@ -2274,10 +2281,12 @@ def main():
         live_acc = None
         live_n = 0
 
-    # Prominent headline: prefer live only when it has enough samples; otherwise use backtest.
+    # Prominent headline: prefer live data when available (N >= 1), fall back to backtest
     accuracy_text = "Accuracy within ±2%: collecting"
-    if live_n >= 24 and live_acc is not None:
-        accuracy_text = f"Accuracy within ±2% (24H Live): {live_acc:.1f}% (N={live_n})"
+    if live_n >= 1 and live_acc is not None:
+        # Show live accuracy immediately, indicate if preliminary
+        label = " (preliminary)" if live_n < 30 else ""
+        accuracy_text = f"Accuracy within ±2% (24H Live{label}): {live_acc:.1f}% (N={live_n})"
     elif backtest_n > 0 and backtest_acc is not None:
         accuracy_text = f"Accuracy within ±2% (24H Backtest 7D): {backtest_acc:.1f}% (N={backtest_n})"
     elif backtest_n > 0:
@@ -2316,13 +2325,14 @@ def main():
 
     # Progressive disclosure: keep validation details collapsed by default
     with st.expander("24H Validation (Predicted vs Actual)", expanded=False):
-        # Live 24H validation is still being saved in the background, but we keep it hidden
-        # until we have enough real completed points to be meaningful.
-        if live_n < 24:
-            st.info(f"Live 24H validation is collecting in the background (completed points: {live_n}). It will appear here once enough data is available.")
-        else:
+        # Show live 24H validation immediately when any data is available (N >= 1)
+        if live_n >= 1:
             if validation_summary_html:
                 st.markdown(validation_summary_html, unsafe_allow_html=True)
+            
+            # Show preliminary data notice if sample size is small
+            if live_n < 30:
+                st.caption(f"⚡ Live validation with {live_n} completed predictions (preliminary results - more data accumulating)")
 
             if not validation_chart_df.empty:
                 fig_val = go.Figure()
@@ -2345,9 +2355,14 @@ def main():
                     hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
                 ))
 
+                # Add accuracy to chart title
+                title_text = '24H Validation: Predicted vs Actual'
+                if live_acc is not None:
+                    title_text += f' • Accuracy: {live_acc:.1f}%'
+                
                 fig_val.update_layout(
                     title=dict(
-                        text='24H Validation: Predicted vs Actual',
+                        text=title_text,
                         font=dict(size=13, color=plot_title_color, weight=600)
                     ),
                     xaxis_title='Target Time (UTC)',
@@ -2386,6 +2401,8 @@ def main():
                 )
 
                 st.plotly_chart(fig_val, width='stretch')
+        else:
+            st.info(f"Live 24H validation is collecting (completed points: {live_n}). Check back soon!")
 
         # 7-day rolling backtest for the 24H horizon (real historical evaluation, not live tracking)
         st.markdown(
