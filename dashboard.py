@@ -1663,26 +1663,23 @@ def compute_historical_backtest(
     return pred_df
 
 
-def _accuracy_from_pred_actual_df(df: pd.DataFrame, tolerance_pct: float = 2.0) -> tuple[int, float | None, float | None]:
-    """Return (n, median_abs_pct_error, tolerance_based_accuracy_pct).
+def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, float | None]:
+    """Return (n, median_abs_pct_error, variance_based_accuracy_pct).
 
-    Tolerance-Based Price Accuracy (±k%) counts predictions as correct if they fall
-    within an acceptable percentage range of the actual price.
+    Variance-Based Price Accuracy (%) measures average closeness using predicted price as denominator.
 
     For each prediction i:
-        Error_i = |Actual_i - Predicted_i| / Actual_i × 100
-    
-    Count as correct if:
-        Error_i ≤ k (where k = tolerance_pct, default 2%)
+        Variance_i = |Actual_i - Predicted_i| / Predicted_i
     
     Compute:
-        Accuracy_±k% = (Number of correct predictions / N) × 100
+        Avg Variance = (Sum of all Variance_i) / N
+        Accuracy (%) = 100 - (Avg Variance × 100)
 
     Notes:
-    - Uses actual as denominator (standard relative error)
-    - Predictions with actual == 0 are ignored to avoid division by zero
+    - Always uses absolute values so variance is positive
+    - Uses predicted as denominator (as per requirement)
+    - Predictions with predicted == 0 are ignored to avoid division by zero
     - Does not change any prediction horizons, charts, or other error metrics
-    - Tolerance is configurable (default k=2%)
     """
     try:
         if df is None or df.empty:
@@ -1699,23 +1696,25 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame, tolerance_pct: float = 2.0) 
         ape = ape.replace([np.inf, -np.inf], np.nan).dropna()
         median_ape = float(np.nanmedian(ape.values)) if not ape.empty else None
 
-        # Tolerance-based accuracy: Error_i = |Actual_i - Predicted_i| / Actual_i × 100
-        valid_mask = d['actual'].notna() & np.isfinite(d['actual']) & (d['actual'] != 0)
+        # Variance-based accuracy: Variance_i = |Actual_i - Predicted_i| / Predicted_i
+        valid_mask = d['predicted'].notna() & np.isfinite(d['predicted']) & (d['predicted'] != 0)
         if not bool(valid_mask.any()):
-            # No valid entries to compute tolerance-based accuracy
+            # No valid entries to compute variance-based accuracy
             return int(valid_mask.sum()), median_ape, None
 
-        errors = (np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / np.abs(d.loc[valid_mask, 'actual'])) * 100.0
-        errors = errors.replace([np.inf, -np.inf], np.nan).dropna()
-        if errors.empty:
+        # Calculate variance for each prediction (always positive)
+        variances = np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / np.abs(d.loc[valid_mask, 'predicted'])
+        variances = variances.replace([np.inf, -np.inf], np.nan).dropna()
+        if variances.empty:
             return int(valid_mask.sum()), median_ape, None
 
-        # Count predictions as correct if error <= tolerance
-        correct_count = int((errors <= tolerance_pct).sum())
-        total_count = int(len(errors))
-        tolerance_accuracy = float((correct_count / total_count) * 100.0) if total_count > 0 else 0.0
+        # Average variance across all predictions
+        avg_variance = float(variances.mean())
         
-        return total_count, median_ape, float(tolerance_accuracy)
+        # Accuracy = 100 - (Avg Variance × 100), clamped to minimum of 0
+        accuracy = max(0.0, 100.0 - (avg_variance * 100.0))
+        
+        return int(len(variances)), median_ape, float(accuracy)
     except Exception:
         return 0, None, None
 
