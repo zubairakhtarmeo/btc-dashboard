@@ -209,6 +209,9 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
             if actual_price is not None and actual_ts is not None:
                 r['actual_24h'] = float(actual_price)
                 r['actual_at'] = pd.to_datetime(actual_ts, utc=True).isoformat()
+                print(f"[DASHBOARD] Filled actual for {t}: ${actual_price:,.2f}")
+            else:
+                print(f"[DASHBOARD] Could not find actual price for {t} (data gap or missing)")
 
     _save_validation_records(records)
 
@@ -2077,6 +2080,14 @@ def main():
         st.error(f"⚠️ Failed to fetch live data: {error or 'No data returned'}")
         st.info("The data APIs may be temporarily unavailable. Please try refreshing in a few minutes.")
         st.stop()
+    
+    # Log price data range for debugging
+    try:
+        price_df_debug = _ensure_datetime_index(price_data)
+        if isinstance(price_df_debug.index, pd.DatetimeIndex) and len(price_df_debug) > 0:
+            print(f"[DASHBOARD] Price data range: {price_df_debug.index[0]} to {price_df_debug.index[-1]} ({len(price_df_debug)} candles)")
+    except Exception:
+        pass
 
     if current_price is None:
         try:
