@@ -157,8 +157,10 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
     try:
         df = _ensure_datetime_index(price_data).sort_index()
         if not isinstance(df.index, pd.DatetimeIndex):
+            print(f"[DEBUG] _nearest_close_at: index is not DatetimeIndex")
             return None, None
         if 'close' not in df.columns or len(df) == 0:
+            print(f"[DEBUG] _nearest_close_at: no close column or empty df")
             return None, None
 
         target_ts = pd.to_datetime(target_ts, utc=True)
@@ -166,16 +168,20 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
         # Use the last known close at-or-before target time (prevents accidental future lookup).
         idx = df.index.get_indexer([target_ts], method='pad')[0]
         if idx < 0:
+            print(f"[DEBUG] _nearest_close_at: no prior candle for {target_ts}")
             return None, None
 
         actual_ts = df.index[idx]
+        time_diff = target_ts - actual_ts
         # Sanity tolerance: if the closest prior candle is too far away, treat as missing.
         # Increased tolerance to 6 hours to handle API data gaps
-        if (target_ts - actual_ts) > pd.Timedelta(hours=6):
+        if time_diff > pd.Timedelta(hours=6):
+            print(f"[DEBUG] _nearest_close_at: nearest candle at {actual_ts} is {time_diff} away from target {target_ts} (>6h)")
             return None, None
         actual_price = float(df['close'].iloc[idx])
         return actual_price, actual_ts
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] _nearest_close_at exception: {e}")
         return None, None
 
 
