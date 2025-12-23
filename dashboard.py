@@ -157,10 +157,10 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
     try:
         df = _ensure_datetime_index(price_data).sort_index()
         if not isinstance(df.index, pd.DatetimeIndex):
-            print(f"[DEBUG] _nearest_close_at: index is not DatetimeIndex")
+            print(f"[DEBUG] _nearest_close_at: index is not DatetimeIndex", flush=True)
             return None, None
         if 'close' not in df.columns or len(df) == 0:
-            print(f"[DEBUG] _nearest_close_at: no close column or empty df")
+            print(f"[DEBUG] _nearest_close_at: no close column or empty df", flush=True)
             return None, None
 
         target_ts = pd.to_datetime(target_ts, utc=True)
@@ -168,7 +168,7 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
         # Use the last known close at-or-before target time (prevents accidental future lookup).
         idx = df.index.get_indexer([target_ts], method='pad')[0]
         if idx < 0:
-            print(f"[DEBUG] _nearest_close_at: no prior candle for {target_ts}")
+            print(f"[DEBUG] _nearest_close_at: no prior candle for {target_ts}", flush=True)
             return None, None
 
         actual_ts = df.index[idx]
@@ -176,12 +176,12 @@ def _nearest_close_at(price_data: pd.DataFrame, target_ts: pd.Timestamp) -> tupl
         # Sanity tolerance: if the closest prior candle is too far away, treat as missing.
         # Increased tolerance to 6 hours to handle API data gaps
         if time_diff > pd.Timedelta(hours=6):
-            print(f"[DEBUG] _nearest_close_at: nearest candle at {actual_ts} is {time_diff} away from target {target_ts} (>6h)")
+            print(f"[DEBUG] _nearest_close_at: nearest candle at {actual_ts} is {time_diff} away from target {target_ts} (>6h)", flush=True)
             return None, None
         actual_price = float(df['close'].iloc[idx])
         return actual_price, actual_ts
     except Exception as e:
-        print(f"[DEBUG] _nearest_close_at exception: {e}")
+        print(f"[DEBUG] _nearest_close_at exception: {e}", flush=True)
         return None, None
 
 
@@ -2091,9 +2091,14 @@ def main():
     try:
         price_df_debug = _ensure_datetime_index(price_data)
         if isinstance(price_df_debug.index, pd.DatetimeIndex) and len(price_df_debug) > 0:
-            print(f"[DASHBOARD] Price data range: {price_df_debug.index[0]} to {price_df_debug.index[-1]} ({len(price_df_debug)} candles)")
-    except Exception:
-        pass
+            print(f"[DASHBOARD] Price data range: {price_df_debug.index[0]} to {price_df_debug.index[-1]} ({len(price_df_debug)} candles)", flush=True)
+            # Show timestamps around Dec 22 for debugging
+            dec22_candles = price_df_debug[(price_df_debug.index >= '2025-12-22 00:00:00+00:00') & 
+                                          (price_df_debug.index <= '2025-12-23 13:00:00+00:00')]
+            if len(dec22_candles) > 0:
+                print(f"[DASHBOARD] Dec 22-23 candles: {list(dec22_candles.index[:20])}", flush=True)
+    except Exception as e:
+        print(f"[DASHBOARD] Debug logging error: {e}", flush=True)
 
     if current_price is None:
         try:
