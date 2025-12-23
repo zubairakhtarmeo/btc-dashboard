@@ -201,6 +201,7 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
 
     # Create a record for this hour if missing
     if not any(pd.to_datetime(r.get('made_at'), utc=True, errors='coerce') == now_utc for r in records):
+        print(f"[DEBUG] Creating new validation record: predicted_24h={predicted_24h}, current_price should be ~89k", flush=True)
         records.append({
             'made_at': now_utc.isoformat(),
             'target_at': target_utc.isoformat(),
@@ -2207,7 +2208,15 @@ def main():
         if isinstance(pred_scaled, np.ndarray):
             pred_scaled = float(pred_scaled.flatten()[0])
         
+        # DEBUG: Check if pred_scaled is already in real units (not scaled)
+        if label == '24H':
+            print(f"[DEBUG] 24H pred_scaled={pred_scaled}, current_price={current_price}", flush=True)
+        
         pred_price = predictor.price_scaler.inverse_transform([[pred_scaled]])[0, 0]
+        
+        # DEBUG: Check inverse transform result
+        if label == '24H':
+            print(f"[DEBUG] 24H pred_price after inverse_transform={pred_price}", flush=True)
         
         if hasattr(predictor.price_scaler, 'scale_'):
             pred_std_price = float(pred_std_scaled.flatten()[0]) * predictor.price_scaler.scale_[0]
@@ -2226,6 +2235,7 @@ def main():
     validation_summary_html = ''
     validation_chart_df = pd.DataFrame()
     if pred_24h_price is not None:
+        print(f"[DEBUG] Passing pred_24h_price to validation: {pred_24h_price}", flush=True)
         validation_summary_html, validation_chart_df = _update_24h_validation(price_data, float(pred_24h_price))
 
     # Update status strip with reliable metrics (live 24H only once it has enough real samples)
