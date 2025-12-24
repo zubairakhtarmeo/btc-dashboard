@@ -2340,8 +2340,8 @@ def main():
                 name='Actual',
                 marker=dict(color='#10b981', line=dict(color='#059669', width=1)),
                 text=[f"${val:,.0f}" for val in daily_agg['actual']],
-                textposition='outside',
-                textfont=dict(size=11, color=plot_text_color),
+                textposition='inside',
+                textfont=dict(size=11, color='#ffffff', weight='bold'),
                 hovertemplate='<b>%{x|%b %d, %Y}</b><br>Actual: $%{y:,.0f}<extra></extra>',
                 opacity=0.8
             ))
@@ -2350,13 +2350,13 @@ def main():
             fig_roll.add_trace(go.Scatter(
                 x=daily_agg['date'],
                 y=daily_agg['predicted'],
-                mode='lines+markers',
+                mode='lines+markers+text',
                 name='Predicted (24H)',
                 line=dict(color='#818cf8', width=3),
                 marker=dict(size=8, color="#cccff0", symbol='circle', line=dict(color='#4f46e5', width=1.5)),
                 text=[f"${val:,.0f}" for val in daily_agg['predicted']],
                 textposition='top center',
-                textfont=dict(size=11, color=plot_text_color),
+                textfont=dict(size=10, color='#818cf8'),
                 hovertemplate='<b>%{x|%b %d, %Y}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
 
