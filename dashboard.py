@@ -1697,22 +1697,23 @@ def compute_historical_backtest(
 
 
 def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, float | None]:
-    """Return (n, median_abs_pct_error, variance_based_accuracy_pct).
+    """Return (n, median_abs_pct_error, average_percentage_error_pct).
 
-    Variance-Based Price Accuracy (%) measures average closeness using predicted price as denominator.
+    Average Percentage Error (%) using predicted price as denominator.
 
-    For each prediction i:
-        Variance_i = |Actual_i - Predicted_i| / Predicted_i
+    Per-row formula:
+        error_pct_i = |actual_i - predicted_i| / predicted_i
     
-    Compute:
-        Avg Variance = (Sum of all Variance_i) / N
-        Accuracy (%) = 100 - (Avg Variance × 100)
+    Row eligibility rule:
+        Include ONLY rows where actual_i IS NOT NULL
+    
+    Final metric:
+        average_error_pct = SUM(error_pct_i) / COUNT(rows where actual IS NOT NULL) × 100
 
     Notes:
-    - Always uses absolute values so variance is positive
-    - Uses predicted as denominator (as per requirement)
-    - Predictions with predicted == 0 are ignored to avoid division by zero
-    - Does not change any prediction horizons, charts, or other error metrics
+    - Only rows with non-NULL actual values are included
+    - Denominator is predicted price
+    - Predictions with predicted == 0 are excluded to avoid division by zero
     """
     try:
         if df is None or df.empty:
@@ -1720,7 +1721,9 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         d = df.copy()
         d['predicted'] = pd.to_numeric(d.get('predicted'), errors='coerce')
         d['actual'] = pd.to_numeric(d.get('actual'), errors='coerce')
-        d = d.dropna(subset=['predicted', 'actual'])
+        
+        # Row eligibility: actual IS NOT NULL
+        d = d.dropna(subset=['actual'])
         if d.empty:
             return 0, None, None
 
@@ -1729,30 +1732,24 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         ape = ape.replace([np.inf, -np.inf], np.nan).dropna()
         median_ape = float(np.nanmedian(ape.values)) if not ape.empty else None
 
-        # Variance-based accuracy per user specification:
-        # Variance_i = (Actual_i - Predicted_i) / Predicted_i  (note: NOT absolute value here)
-        # Average Variance = Sum of all Variance_i / N
-        # Accuracy = 100 - (Average Variance × 100)
+        # Average Percentage Error per user formula:
+        # error_pct = |actual - predicted| / predicted
+        # average_error_pct = SUM(error_pct) / COUNT(rows) × 100
         valid_mask = d['predicted'].notna() & np.isfinite(d['predicted']) & (d['predicted'] != 0)
         if not bool(valid_mask.any()):
-            # No valid entries to compute variance-based accuracy
+            # No valid entries to compute average error
             return int(valid_mask.sum()), median_ape, None
 
-        # Calculate variance for each prediction per user formula
-        # Variance = (Actual - Predicted) / Predicted (NOT absolute in numerator)
-        variances = (d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / d.loc[valid_mask, 'predicted']
-        variances = variances.replace([np.inf, -np.inf], np.nan).dropna()
-        if variances.empty:
+        # Calculate error_pct for each prediction using predicted as denominator
+        error_pcts = np.abs(d.loc[valid_mask, 'actual'] - d.loc[valid_mask, 'predicted']) / d.loc[valid_mask, 'predicted']
+        error_pcts = error_pcts.replace([np.inf, -np.inf], np.nan).dropna()
+        if error_pcts.empty:
             return int(valid_mask.sum()), median_ape, None
 
-        # Average variance across all predictions
-        avg_variance = float(variances.mean())
+        # Average Percentage Error (expressed as percentage)
+        avg_error_pct = float(error_pcts.mean() * 100.0)
         
-        # Accuracy = 100 - (Avg Variance × 100)
-        # Don't clamp - can be negative if model consistently over/under predicts
-        accuracy = 100.0 - (avg_variance * 100.0)
-        
-        return int(len(variances)), median_ape, float(accuracy)
+        return int(len(error_pcts)), median_ape, float(avg_error_pct)
     except Exception:
         return 0, None, None
 
