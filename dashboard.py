@@ -2339,28 +2339,26 @@ def main():
 
             fig_roll = go.Figure()
             
-            # Actual bars (professional, clean bars - one per day visually)
-            fig_roll.add_trace(go.Bar(
-                x=viz_df_filtered['target_at'].dt.date,
-                y=viz_df_filtered['actual'],
-                name='Actual',
-                marker=dict(
-                    color='#10b981',
-                    opacity=0.7,
-                    line=dict(color='#059669', width=1)
-                ),
-                hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
-            ))
-            
-            # Predicted line (clean line with 2-3 points per day)
+            # Predicted line
             fig_roll.add_trace(go.Scatter(
                 x=viz_df_filtered['target_at'].dt.date,
                 y=viz_df_filtered['predicted'],
                 mode='lines+markers',
                 name='Predicted (24H)',
-                line=dict(color='#818cf8', width=3),
-                marker=dict(size=7, color='#818cf8', symbol='circle', line=dict(color='#4f46e5', width=1.5)),
+                line=dict(color='#818cf8', width=2.5, shape='spline'),
+                marker=dict(size=6, color='#818cf8', symbol='circle', line=dict(color='#4f46e5', width=1)),
                 hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
+            ))
+            
+            # Actual line
+            fig_roll.add_trace(go.Scatter(
+                x=viz_df_filtered['target_at'].dt.date,
+                y=viz_df_filtered['actual'],
+                mode='lines+markers',
+                name='Actual',
+                line=dict(color='#10b981', width=2.5, shape='spline'),
+                marker=dict(size=6, color='#10b981', symbol='circle', line=dict(color='#059669', width=1)),
+                hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
 
             # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
@@ -2412,8 +2410,7 @@ def main():
                     title_font=dict(color=plot_text_color),
                     tickformat='$,.0f',
                     range=[y_axis_min, y_axis_max]
-                ),
-                bargap=0.2
+                )
             )
             st.plotly_chart(fig_roll, width='stretch')
         else:
