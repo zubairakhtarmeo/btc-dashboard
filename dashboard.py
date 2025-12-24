@@ -2312,143 +2312,142 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Progressive disclosure: validation details collapsed by default
-    with st.expander("Validation: Predicted vs Actual (Last 3 Days)", expanded=False):
-        if isinstance(rolling_3d_df, pd.DataFrame) and not rolling_3d_df.empty:
-            n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
-            st.caption(
-                f"DB-based validation uses real predictions and actual prices. Accuracy shows error-based performance (not ±2% tolerance). (N={n_roll})"
+    # Validation: Predicted vs Actual (Last 3 Days)
+    if isinstance(rolling_3d_df, pd.DataFrame) and not rolling_3d_df.empty:
+        n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
+        st.caption(
+            f"DB-based validation uses real predictions and actual prices. Accuracy shows error-based performance (not ±2% tolerance). (N={n_roll})"
+        )
+
+        # Aggregate data by date for cleaner visualization
+        rolling_viz_df = rolling_3d_df.copy()
+        rolling_viz_df['date'] = pd.to_datetime(rolling_viz_df['target_at']).dt.date
+        daily_agg = rolling_viz_df.groupby('date').agg({
+            'predicted': 'mean',
+            'actual': 'mean'
+        }).reset_index()
+        
+        # Convert date to datetime for plotting
+        daily_agg['date'] = pd.to_datetime(daily_agg['date'])
+
+        fig_roll = go.Figure()
+        
+        # Actual as bars (table-like visualization)
+        fig_roll.add_trace(go.Bar(
+            x=daily_agg['date'],
+            y=daily_agg['actual'],
+            name='Actual',
+            marker=dict(color='#10b981', line=dict(color='#059669', width=1)),
+            text=[f"${val:,.0f}" for val in daily_agg['actual']],
+            textposition='inside',
+            textfont=dict(size=11, color='#ffffff', weight='bold'),
+            hovertemplate='<b>%{x|%b %d, %Y}</b><br>Actual: $%{y:,.0f}<extra></extra>',
+            opacity=0.8
+        ))
+        
+        # Predicted as line
+        fig_roll.add_trace(go.Scatter(
+            x=daily_agg['date'],
+            y=daily_agg['predicted'],
+            mode='lines+markers+text',
+            name='Predicted (24H)',
+            line=dict(color='#818cf8', width=3),
+            marker=dict(size=8, color="#cccff0", symbol='circle', line=dict(color='#4f46e5', width=1.5)),
+            text=[f"${val:,.0f}" for val in daily_agg['predicted']],
+            textposition='top center',
+            textfont=dict(size=10, color='#818cf8'),
+            hovertemplate='<b>%{x|%b %d, %Y}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
+        ))
+
+        # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
+        y_min = min(daily_agg['actual'].min(), daily_agg['predicted'].min())
+        y_max = max(daily_agg['actual'].max(), daily_agg['predicted'].max())
+        y_center = (y_min + y_max) / 2
+        y_range_target = 10000
+        y_axis_min = max(0, y_center - y_range_target / 2)
+        y_axis_max = y_center + y_range_target / 2
+
+        title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
+        fig_roll.update_layout(
+            title=dict(
+                text=f"3-Day Rolling Validation: Predicted vs Actual{title_suffix}",
+                font=dict(size=13, color=plot_title_color, weight=600)
+            ),
+            xaxis_title='Date',
+            yaxis_title='Price (USD)',
+            hovermode='x unified',
+            height=380,
+            template=plotly_template,
+            paper_bgcolor=plot_panel_bg,
+            plot_bgcolor=plot_panel_bg,
+            font=dict(size=11, color=plot_text_color),
+            margin=dict(t=45, b=35, l=60, r=40),
+            showlegend=True,
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1,
+                bgcolor=plot_legend_bg,
+                bordercolor=plot_border,
+                borderwidth=1,
+                font=dict(color=plot_text_color, size=11)
+            ),
+            xaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color),
+                tickformat='%b %d',
+                dtick=86400000.0  # One day in milliseconds
+            ),
+            yaxis=dict(
+                gridcolor=plot_grid_color,
+                linecolor=plot_border,
+                tickfont=dict(color=plot_text_color),
+                title_font=dict(color=plot_text_color),
+                tickformat='$,.0f',
+                range=[y_axis_min, y_axis_max]
             )
+        )
+        st.plotly_chart(fig_roll, width='stretch')
+    else:
+        st.info(
+            "3-day rolling validation will appear once predictions have actual prices (24 hours after prediction time)."
+        )
 
-            # Aggregate data by date for cleaner visualization
-            rolling_viz_df = rolling_3d_df.copy()
-            rolling_viz_df['date'] = pd.to_datetime(rolling_viz_df['target_at']).dt.date
-            daily_agg = rolling_viz_df.groupby('date').agg({
-                'predicted': 'mean',
-                'actual': 'mean'
-            }).reset_index()
-            
-            # Convert date to datetime for plotting
-            daily_agg['date'] = pd.to_datetime(daily_agg['date'])
+        try:
+            dbg = getattr(rolling_3d_df, 'attrs', {}).get('debug') if isinstance(rolling_3d_df, pd.DataFrame) else None
+        except Exception:
+            dbg = None
+        if dbg:
+            st.caption(f"Rolling validation debug: {dbg}")
 
-            fig_roll = go.Figure()
-            
-            # Actual as bars (table-like visualization)
-            fig_roll.add_trace(go.Bar(
-                x=daily_agg['date'],
-                y=daily_agg['actual'],
-                name='Actual',
-                marker=dict(color='#10b981', line=dict(color='#059669', width=1)),
-                text=[f"${val:,.0f}" for val in daily_agg['actual']],
-                textposition='inside',
-                textfont=dict(size=11, color='#ffffff', weight='bold'),
-                hovertemplate='<b>%{x|%b %d, %Y}</b><br>Actual: $%{y:,.0f}<extra></extra>',
-                opacity=0.8
-            ))
-            
-            # Predicted as line
-            fig_roll.add_trace(go.Scatter(
-                x=daily_agg['date'],
-                y=daily_agg['predicted'],
-                mode='lines+markers+text',
-                name='Predicted (24H)',
-                line=dict(color='#818cf8', width=3),
-                marker=dict(size=8, color="#cccff0", symbol='circle', line=dict(color='#4f46e5', width=1.5)),
-                text=[f"${val:,.0f}" for val in daily_agg['predicted']],
-                textposition='top center',
-                textfont=dict(size=10, color='#818cf8'),
-                hovertemplate='<b>%{x|%b %d, %Y}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
-            ))
+        # Diagnostics (best-effort) to help debug Streamlit Cloud data/provider issues.
+        try:
+            diag = _format_price_data_diagnostics(price_data, current_price)
+        except Exception:
+            diag = "diagnostics_unavailable"
 
-            # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
-            y_min = min(daily_agg['actual'].min(), daily_agg['predicted'].min())
-            y_max = max(daily_agg['actual'].max(), daily_agg['predicted'].max())
-            y_center = (y_min + y_max) / 2
-            y_range_target = 10000
-            y_axis_min = max(0, y_center - y_range_target / 2)
-            y_axis_max = y_center + y_range_target / 2
+        try:
+            cols = list(price_data.columns) if isinstance(price_data, pd.DataFrame) else []
+        except Exception:
+            cols = []
 
-            title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
-            fig_roll.update_layout(
-                title=dict(
-                    text=f"3-Day Rolling Validation: Predicted vs Actual{title_suffix}",
-                    font=dict(size=13, color=plot_title_color, weight=600)
-                ),
-                xaxis_title='Date',
-                yaxis_title='Price (USD)',
-                hovermode='x unified',
-                height=380,
-                template=plotly_template,
-                paper_bgcolor=plot_panel_bg,
-                plot_bgcolor=plot_panel_bg,
-                font=dict(size=11, color=plot_text_color),
-                margin=dict(t=45, b=35, l=60, r=40),
-                showlegend=True,
-                legend=dict(
-                    orientation='h',
-                    yanchor='bottom',
-                    y=1.02,
-                    xanchor='right',
-                    x=1,
-                    bgcolor=plot_legend_bg,
-                    bordercolor=plot_border,
-                    borderwidth=1,
-                    font=dict(color=plot_text_color, size=11)
-                ),
-                xaxis=dict(
-                    gridcolor=plot_grid_color,
-                    linecolor=plot_border,
-                    tickfont=dict(color=plot_text_color),
-                    title_font=dict(color=plot_text_color),
-                    tickformat='%b %d',
-                    dtick=86400000.0  # One day in milliseconds
-                ),
-                yaxis=dict(
-                    gridcolor=plot_grid_color,
-                    linecolor=plot_border,
-                    tickfont=dict(color=plot_text_color),
-                    title_font=dict(color=plot_text_color),
-                    tickformat='$,.0f',
-                    range=[y_axis_min, y_axis_max]
-                )
-            )
-            st.plotly_chart(fig_roll, width='stretch')
-        else:
-            st.info(
-                "3-day rolling validation will appear once predictions have actual prices (24 hours after prediction time)."
-            )
+        try:
+            horizons = list(getattr(predictor, 'prediction_horizons', [])) if predictor is not None else []
+        except Exception:
+            horizons = []
 
-            try:
-                dbg = getattr(rolling_3d_df, 'attrs', {}).get('debug') if isinstance(rolling_3d_df, pd.DataFrame) else None
-            except Exception:
-                dbg = None
-            if dbg:
-                st.caption(f"Rolling validation debug: {dbg}")
+        if rolling_err:
+            st.caption(f"Rolling validation error: {rolling_err}")
 
-            # Diagnostics (best-effort) to help debug Streamlit Cloud data/provider issues.
-            try:
-                diag = _format_price_data_diagnostics(price_data, current_price)
-            except Exception:
-                diag = "diagnostics_unavailable"
-
-            try:
-                cols = list(price_data.columns) if isinstance(price_data, pd.DataFrame) else []
-            except Exception:
-                cols = []
-
-            try:
-                horizons = list(getattr(predictor, 'prediction_horizons', [])) if predictor is not None else []
-            except Exception:
-                horizons = []
-
-            if rolling_err:
-                st.caption(f"Rolling validation error: {rolling_err}")
-
-            st.caption(f"Price diagnostics: {diag}")
-            if cols:
-                st.caption(f"Price columns: {', '.join(cols)}")
-            if horizons:
-                st.caption(f"Model horizons: {horizons}")
+        st.caption(f"Price diagnostics: {diag}")
+        if cols:
+            st.caption(f"Price columns: {', '.join(cols)}")
+        if horizons:
+            st.caption(f"Model horizons: {horizons}")
 
     
     
