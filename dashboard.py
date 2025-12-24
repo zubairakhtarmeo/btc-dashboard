@@ -2010,7 +2010,7 @@ def main():
     status_ph.markdown(
         _render_status_strip(
             utc_hms=datetime.now(timezone.utc).strftime('%H:%M:%S'),
-            accuracy_text="Accuracy within ±2%: calculating…",
+            accuracy_text="Accuracy: calculating…",
         ),
         unsafe_allow_html=True,
     )
@@ -2153,26 +2153,49 @@ def main():
         st.error("Failed to load model. Please check the model files.")
         st.stop()
 
-    # Credible performance: compute a 7-day historical backtest for 24H horizon (does not depend on live logs)
-    bt24 = pd.DataFrame()
-    backtest_err: str | None = None
-    backtest_text = "24H Backtest 7D (Accuracy within ±2%): unavailable"
-    backtest_acc = None
-    backtest_n = 0
+    # DB-based 3-day rolling validation using actual predictions with actuals
+    rolling_3d_df = pd.DataFrame()
+    rolling_err: str | None = None
+    rolling_text = "Live Validation (Last 3 Days – DB Actuals): unavailable"
+    rolling_acc = None
+    rolling_n = 0
     try:
-        bt24 = compute_historical_backtest(predictor, metadata, price_data, horizon_hours=24, days=7)
-        n_bt, med_ape_bt, acc_bt = _accuracy_from_pred_actual_df(bt24)
-        backtest_n = int(n_bt)
-        backtest_acc = acc_bt
-        if n_bt > 0 and acc_bt is not None:
-            backtest_text = f"24H Backtest 7D (Accuracy within ±2%): {acc_bt:.1f}% (N={n_bt})"
-        elif n_bt > 0:
-            backtest_text = f"24H Backtest 7D (Accuracy within ±2%): collecting (N={n_bt})"
+        # Load validation records from DB (last 3 days where actual_24h IS NOT NULL)
+        all_records = _load_validation_records()
+        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=3)
+        
+        rows = []
+        for r in all_records:
+            actual = r.get('actual_24h')
+            predicted = r.get('predicted_24h')
+            target_at = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
+            
+            # Row eligibility: actual IS NOT NULL and within last 3 days
+            if actual is None or predicted is None or target_at is pd.NaT:
+                continue
+            if target_at < cutoff:
+                continue
+            
+            rows.append({
+                'target_at': target_at,
+                'predicted': float(predicted),
+                'actual': float(actual)
+            })
+        
+        if rows:
+            rolling_3d_df = pd.DataFrame(rows).sort_values('target_at')
+            n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
+            rolling_n = int(n_roll)
+            rolling_acc = acc_roll
+            if n_roll > 0 and acc_roll is not None:
+                rolling_text = f"Live Validation (Last 3 Days – DB Actuals): {acc_roll:.1f}% (N={n_roll})"
+            elif n_roll > 0:
+                rolling_text = f"Live Validation (Last 3 Days – DB Actuals): collecting (N={n_roll})"
     except Exception as e:
-        backtest_text = "24H Backtest 7D (Accuracy within ±2%): unavailable"
-        backtest_acc = None
-        backtest_n = 0
-        backtest_err = str(e)
+        rolling_text = "Live Validation (Last 3 Days – DB Actuals): unavailable"
+        rolling_acc = None
+        rolling_n = 0
+        rolling_err = str(e)
     
     # Compact centered price panel (contained instrument panel)
     price_24h_ago = price_data['close'].iloc[-25] if len(price_data) >= 25 else price_data['close'].iloc[0]
@@ -2281,18 +2304,18 @@ def main():
         live_acc = None
         live_n = 0
 
-    # Prominent headline: prefer live data when available (N >= 1), fall back to backtest
-    accuracy_text = "Accuracy within ±2%: collecting"
+    # Prominent headline: prefer live data when available (N >= 1), fall back to 3-day rolling
+    accuracy_text = "Accuracy: collecting"
     if live_n >= 1 and live_acc is not None:
         # Show live accuracy immediately, indicate if preliminary
         label = " (preliminary)" if live_n < 30 else ""
-        accuracy_text = f"Accuracy within ±2% (24H Live{label}): {live_acc:.1f}% (N={live_n})"
-    elif backtest_n > 0 and backtest_acc is not None:
-        accuracy_text = f"Accuracy within ±2% (24H Backtest 7D): {backtest_acc:.1f}% (N={backtest_n})"
-    elif backtest_n > 0:
-        accuracy_text = f"Accuracy within ±2% (Backtest 7D): collecting (N={backtest_n})"
+        accuracy_text = f"Accuracy (24H Live{label}): {live_acc:.1f}% (N={live_n})"
+    elif rolling_n > 0 and rolling_acc is not None:
+        accuracy_text = f"Accuracy (3D Rolling – DB Actuals): {rolling_acc:.1f}% (N={rolling_n})"
+    elif rolling_n > 0:
+        accuracy_text = f"Accuracy (3D Rolling): collecting (N={rolling_n})"
     else:
-        accuracy_text = "Accuracy within ±2%: collecting"
+        accuracy_text = "Accuracy: collecting"
 
     status_ph.markdown(
         _render_status_strip(
@@ -2404,40 +2427,40 @@ def main():
         else:
             st.info(f"Live 24H validation is collecting (completed points: {live_n}). Check back soon!")
 
-        # 7-day rolling backtest for the 24H horizon (real historical evaluation, not live tracking)
+        # 3-day rolling validation from DB (real predictions + actuals)
         st.markdown(
-            '<div class="subsection-title" style="margin-top: 1.1rem;">Backtest (Last 7 Days): 24H Rolling Predictions</div>',
+            '<div class="subsection-title" style="margin-top: 1.1rem;">Live Validation (Last 3 Days – DB Actuals)</div>',
             unsafe_allow_html=True,
         )
 
-        if isinstance(bt24, pd.DataFrame) and not bt24.empty:
-            n_bt, med_ape_bt, acc_bt = _accuracy_from_pred_actual_df(bt24)
+        if isinstance(rolling_3d_df, pd.DataFrame) and not rolling_3d_df.empty:
+            n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
             st.caption(
-                f"Backtest uses historical candles to evaluate your model. Accuracy within ±2% shows how often predictions fall within 2% of actual price; Median Abs % Error is an error metric. (N={n_bt})"
+                f"DB-based validation uses real predictions and actual prices. Accuracy shows error-based performance (not ±2% tolerance). (N={n_roll})"
             )
 
-            fig_bt = go.Figure()
-            fig_bt.add_trace(go.Scatter(
-                x=bt24['target_at'],
-                y=bt24['predicted'],
+            fig_roll = go.Figure()
+            fig_roll.add_trace(go.Scatter(
+                x=rolling_3d_df['target_at'],
+                y=rolling_3d_df['predicted'],
                 mode='lines',
                 name='Predicted (24H)',
                 line=dict(color=plot_positive_color, width=2, dash='dash'),
                 hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
-            fig_bt.add_trace(go.Scatter(
-                x=bt24['target_at'],
-                y=bt24['actual'],
+            fig_roll.add_trace(go.Scatter(
+                x=rolling_3d_df['target_at'],
+                y=rolling_3d_df['actual'],
                 mode='lines',
                 name='Actual',
                 line=dict(color=plot_line_color, width=2),
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
 
-            title_suffix = f" • Accuracy within ±2%: {acc_bt:.1f}%" if acc_bt is not None else ""
-            fig_bt.update_layout(
+            title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
+            fig_roll.update_layout(
                 title=dict(
-                    text=f"24H Backtest (7D): Predicted vs Actual{title_suffix}",
+                    text=f"3-Day Rolling Validation: Predicted vs Actual{title_suffix}",
                     font=dict(size=13, color=plot_title_color, weight=600)
                 ),
                 xaxis_title='Target Time (UTC)',
@@ -2474,19 +2497,18 @@ def main():
                     tickformat='$,.0f'
                 )
             )
-            st.plotly_chart(fig_bt, width='stretch')
+            st.plotly_chart(fig_roll, width='stretch')
         else:
             st.info(
-                "Backtest is temporarily unavailable. This usually resolves after a refresh once enough 1H candles load. "
-                "(It requires ~7 days of hourly candles + model sequence window.)"
+                "3-day rolling validation will appear once predictions have actual prices (24 hours after prediction time)."
             )
 
             try:
-                dbg = getattr(bt24, 'attrs', {}).get('debug') if isinstance(bt24, pd.DataFrame) else None
+                dbg = getattr(rolling_3d_df, 'attrs', {}).get('debug') if isinstance(rolling_3d_df, pd.DataFrame) else None
             except Exception:
                 dbg = None
             if dbg:
-                st.caption(f"Backtest debug: {dbg}")
+                st.caption(f"Rolling validation debug: {dbg}")
 
             # Diagnostics (best-effort) to help debug Streamlit Cloud data/provider issues.
             try:
@@ -2504,8 +2526,8 @@ def main():
             except Exception:
                 horizons = []
 
-            if backtest_err:
-                st.caption(f"Backtest error: {backtest_err}")
+            if rolling_err:
+                st.caption(f"Rolling validation error: {rolling_err}")
 
             st.caption(f"Price diagnostics: {diag}")
             if cols:
