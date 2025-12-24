@@ -2320,44 +2320,27 @@ def main():
                 f"DB-based validation uses real predictions and actual prices. Accuracy shows error-based performance (not ±2% tolerance). (N={n_roll})"
             )
 
-            # Create visualization-only dataframe: 2-3 points per day for clean charts
-            viz_df = rolling_3d_df.copy()
-            viz_df['date'] = viz_df['target_at'].dt.date
-            
-            # Select 2-3 evenly spaced points per day (first, middle, last)
-            viz_rows = []
-            for date, group in viz_df.groupby('date'):
-                n = len(group)
-                if n <= 3:
-                    viz_rows.extend(group.to_dict('records'))
-                else:
-                    # Select first, middle, last
-                    indices = [0, n // 2, n - 1]
-                    viz_rows.extend(group.iloc[indices].to_dict('records'))
-            
-            viz_df_filtered = pd.DataFrame(viz_rows).sort_values('target_at')
-
             fig_roll = go.Figure()
             
             # Predicted line
             fig_roll.add_trace(go.Scatter(
-                x=viz_df_filtered['target_at'].dt.date,
-                y=viz_df_filtered['predicted'],
+                x=rolling_3d_df['target_at'],
+                y=rolling_3d_df['predicted'],
                 mode='lines+markers',
                 name='Predicted (24H)',
-                line=dict(color='#818cf8', width=2.5, shape='spline'),
-                marker=dict(size=6, color='#818cf8', symbol='circle', line=dict(color='#4f46e5', width=1)),
+                line=dict(color='#818cf8', width=2.5),
+                marker=dict(size=5, color='#818cf8', symbol='circle', line=dict(color='#4f46e5', width=1)),
                 hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
             
             # Actual line
             fig_roll.add_trace(go.Scatter(
-                x=viz_df_filtered['target_at'].dt.date,
-                y=viz_df_filtered['actual'],
+                x=rolling_3d_df['target_at'],
+                y=rolling_3d_df['actual'],
                 mode='lines+markers',
                 name='Actual',
-                line=dict(color='#10b981', width=2.5, shape='spline'),
-                marker=dict(size=6, color='#10b981', symbol='circle', line=dict(color='#059669', width=1)),
+                line=dict(color='#10b981', width=2.5),
+                marker=dict(size=5, color='#10b981', symbol='circle', line=dict(color='#059669', width=1)),
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
 
@@ -2375,7 +2358,7 @@ def main():
                     text=f"3-Day Rolling Validation: Predicted vs Actual{title_suffix}",
                     font=dict(size=13, color=plot_title_color, weight=600)
                 ),
-                xaxis_title='Date',
+                xaxis_title='Target Time (UTC)',
                 yaxis_title='Price (USD)',
                 hovermode='x unified',
                 height=380,
@@ -2400,8 +2383,7 @@ def main():
                     gridcolor=plot_grid_color,
                     linecolor=plot_border,
                     tickfont=dict(color=plot_text_color),
-                    title_font=dict(color=plot_text_color),
-                    type='category'
+                    title_font=dict(color=plot_text_color)
                 ),
                 yaxis=dict(
                     gridcolor=plot_grid_color,
