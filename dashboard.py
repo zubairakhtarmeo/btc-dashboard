@@ -2321,22 +2321,41 @@ def main():
             )
 
             fig_roll = go.Figure()
+            
+            # Predicted line with data labels
             fig_roll.add_trace(go.Scatter(
                 x=rolling_3d_df['target_at'],
                 y=rolling_3d_df['predicted'],
-                mode='lines',
+                mode='lines+markers+text',
                 name='Predicted (24H)',
-                line=dict(color=plot_positive_color, width=2, dash='dash'),
+                line=dict(color='#6366f1', width=2.5),
+                marker=dict(size=7, color='#6366f1', symbol='circle'),
+                text=[f'${val:,.0f}' for val in rolling_3d_df['predicted']],
+                textposition='top center',
+                textfont=dict(size=9, color='#a5b4fc', family='Inter'),
                 hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
-            fig_roll.add_trace(go.Scatter(
+            
+            # Actual bars (professional bar chart)
+            fig_roll.add_trace(go.Bar(
                 x=rolling_3d_df['target_at'],
                 y=rolling_3d_df['actual'],
-                mode='lines',
                 name='Actual',
-                line=dict(color=plot_line_color, width=2),
+                marker=dict(
+                    color='#10b981',
+                    opacity=0.7,
+                    line=dict(color='#059669', width=1)
+                ),
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
             ))
+
+            # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
+            y_min = min(rolling_3d_df['actual'].min(), rolling_3d_df['predicted'].min())
+            y_max = max(rolling_3d_df['actual'].max(), rolling_3d_df['predicted'].max())
+            y_center = (y_min + y_max) / 2
+            y_range_target = 10000
+            y_axis_min = max(0, y_center - y_range_target / 2)
+            y_axis_max = y_center + y_range_target / 2
 
             title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
             fig_roll.update_layout(
@@ -2347,7 +2366,7 @@ def main():
                 xaxis_title='Target Time (UTC)',
                 yaxis_title='Price (USD)',
                 hovermode='x unified',
-                height=320,
+                height=380,
                 template=plotly_template,
                 paper_bgcolor=plot_panel_bg,
                 plot_bgcolor=plot_panel_bg,
@@ -2375,7 +2394,8 @@ def main():
                     linecolor=plot_border,
                     tickfont=dict(color=plot_text_color),
                     title_font=dict(color=plot_text_color),
-                    tickformat='$,.0f'
+                    tickformat='$,.0f',
+                    range=[y_axis_min, y_axis_max]
                 )
             )
             st.plotly_chart(fig_roll, width='stretch')
