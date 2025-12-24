@@ -1746,10 +1746,13 @@ def _accuracy_from_pred_actual_df(df: pd.DataFrame) -> tuple[int, float | None, 
         if error_pcts.empty:
             return int(valid_mask.sum()), median_ape, None
 
-        # Average Percentage Error (expressed as percentage)
-        avg_error_pct = float(error_pcts.mean() * 100.0)
+        # Average error (as decimal, e.g., 0.05 for 5% error)
+        avg_error_decimal = float(error_pcts.mean())
         
-        return int(len(error_pcts)), median_ape, float(avg_error_pct)
+        # Convert to accuracy: accuracy_pct = (1 - average_error_pct) × 100
+        accuracy_pct = (1.0 - avg_error_decimal) * 100.0
+        
+        return int(len(error_pcts)), median_ape, float(accuracy_pct)
     except Exception:
         return 0, None, None
 
