@@ -2276,46 +2276,12 @@ def main():
     # Store predictions now for future historical charts (best-effort)
     _append_prediction_log(prediction_cards, float(current_price))
 
-    # 24H validation (Predicted vs Actual after 24H)
-    pred_24h_price = next((c['predicted_price'] for c in prediction_cards if c.get('horizon') == '24H'), None)
-    validation_summary_html = ''
-    validation_chart_df = pd.DataFrame()
-    if pred_24h_price is not None:
-        validation_summary_html, validation_chart_df = _update_24h_validation(price_data, float(pred_24h_price))
-
-    # Update status strip with reliable metrics (live 24H only once it has enough real samples)
-    live_text = "24H Live: collecting (N=0)"
-    live_acc = None
-    live_n = 0
-    try:
-        n_live, med_ape_live, acc_live = _accuracy_from_pred_actual_df(
-            validation_chart_df.rename(columns={'predicted': 'predicted', 'actual': 'actual'})
-        )
-        live_n = int(n_live)
-        live_acc = acc_live
-        if n_live >= 1 and acc_live is not None:
-            # Show live accuracy immediately, add 'preliminary' label if N < 30
-            label = "preliminary" if n_live < 30 else ""
-            live_text = f"24H Live: {acc_live:.1f}% (N={n_live}{', ' + label if label else ''})"
-        else:
-            live_text = f"24H Live: collecting (N={n_live})"
-    except Exception:
-        live_text = "24H Live: collecting (N=0)"
-        live_acc = None
-        live_n = 0
-
-    # Prominent headline: prefer live data when available (N >= 1), fall back to 3-day rolling
+    # Use 3-day rolling validation accuracy for status strip
     accuracy_text = "Accuracy: collecting"
-    if live_n >= 1 and live_acc is not None:
-        # Show live accuracy immediately, indicate if preliminary
-        label = " (preliminary)" if live_n < 30 else ""
-        accuracy_text = f"Accuracy (24H Live{label}): {live_acc:.1f}% (N={live_n})"
-    elif rolling_n > 0 and rolling_acc is not None:
+    if rolling_n > 0 and rolling_acc is not None:
         accuracy_text = f"Accuracy (3D Rolling – DB Actuals): {rolling_acc:.1f}% (N={rolling_n})"
     elif rolling_n > 0:
         accuracy_text = f"Accuracy (3D Rolling): collecting (N={rolling_n})"
-    else:
-        accuracy_text = "Accuracy: collecting"
 
     status_ph.markdown(
         _render_status_strip(
@@ -2346,93 +2312,8 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Progressive disclosure: keep validation details collapsed by default
-    with st.expander("24H Validation (Predicted vs Actual)", expanded=False):
-        # Show live 24H validation immediately when any data is available (N >= 1)
-        if live_n >= 1:
-            if validation_summary_html:
-                st.markdown(validation_summary_html, unsafe_allow_html=True)
-            
-            # Show preliminary data notice if sample size is small
-            if live_n < 30:
-                st.caption(f"⚡ Live validation with {live_n} completed predictions (preliminary results - more data accumulating)")
-
-            if not validation_chart_df.empty:
-                fig_val = go.Figure()
-                fig_val.add_trace(go.Scatter(
-                    x=validation_chart_df['target_at'],
-                    y=validation_chart_df['predicted'],
-                    mode='lines+markers',
-                    name='Predicted (24H)',
-                    line=dict(color=plot_positive_color, width=2, dash='dash'),
-                    marker=dict(size=8, color=plot_positive_color, line=dict(color=plot_panel_bg, width=1)),
-                    hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
-                ))
-                fig_val.add_trace(go.Scatter(
-                    x=validation_chart_df['target_at'],
-                    y=validation_chart_df['actual'],
-                    mode='lines+markers',
-                    name='Actual',
-                    line=dict(color=plot_line_color, width=2),
-                    marker=dict(size=8, color=plot_line_color, line=dict(color=plot_panel_bg, width=1)),
-                    hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
-                ))
-
-                # Add accuracy to chart title
-                title_text = '24H Validation: Predicted vs Actual'
-                if live_acc is not None:
-                    title_text += f' • Accuracy: {live_acc:.1f}%'
-                
-                fig_val.update_layout(
-                    title=dict(
-                        text=title_text,
-                        font=dict(size=13, color=plot_title_color, weight=600)
-                    ),
-                    xaxis_title='Target Time (UTC)',
-                    yaxis_title='Price (USD)',
-                    hovermode='x unified',
-                    height=260,
-                    template=plotly_template,
-                    paper_bgcolor=plot_panel_bg,
-                    plot_bgcolor=plot_panel_bg,
-                    font=dict(size=11, color=plot_text_color),
-                    margin=dict(t=45, b=35, l=60, r=40),
-                    legend=dict(
-                        orientation='h',
-                        yanchor='bottom',
-                        y=1.02,
-                        xanchor='right',
-                        x=1,
-                        bgcolor=plot_legend_bg,
-                        bordercolor=plot_border,
-                        borderwidth=1,
-                        font=dict(color=plot_text_color)
-                    ),
-                    xaxis=dict(
-                        gridcolor=plot_grid_color,
-                        linecolor=plot_border,
-                        tickfont=dict(color=plot_text_color),
-                        title_font=dict(color=plot_text_color)
-                    ),
-                    yaxis=dict(
-                        gridcolor=plot_grid_color,
-                        linecolor=plot_border,
-                        tickfont=dict(color=plot_text_color),
-                        title_font=dict(color=plot_text_color),
-                        tickformat='$,.0f'
-                    )
-                )
-
-                st.plotly_chart(fig_val, width='stretch')
-        else:
-            st.info(f"Live 24H validation is collecting (completed points: {live_n}). Check back soon!")
-
-        # 3-day rolling validation from DB (real predictions + actuals)
-        st.markdown(
-            '<div class="subsection-title" style="margin-top: 1.1rem;">Live Validation (Last 3 Days – DB Actuals)</div>',
-            unsafe_allow_html=True,
-        )
-
+    # Progressive disclosure: validation details collapsed by default
+    with st.expander("Validation: Predicted vs Actual (Last 3 Days)", expanded=False):
         if isinstance(rolling_3d_df, pd.DataFrame) and not rolling_3d_df.empty:
             n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
             st.caption(
