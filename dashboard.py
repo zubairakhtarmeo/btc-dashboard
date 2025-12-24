@@ -2322,31 +2322,29 @@ def main():
 
             fig_roll = go.Figure()
             
-            # Predicted line with data labels
-            fig_roll.add_trace(go.Scatter(
-                x=rolling_3d_df['target_at'],
-                y=rolling_3d_df['predicted'],
-                mode='lines+markers+text',
-                name='Predicted (24H)',
-                line=dict(color='#6366f1', width=2.5),
-                marker=dict(size=7, color='#6366f1', symbol='circle'),
-                text=[f'${val:,.0f}' for val in rolling_3d_df['predicted']],
-                textposition='top center',
-                textfont=dict(size=9, color='#a5b4fc', family='Inter'),
-                hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
-            ))
-            
-            # Actual bars (professional bar chart)
+            # Actual bars (professional, clean bars)
             fig_roll.add_trace(go.Bar(
                 x=rolling_3d_df['target_at'],
                 y=rolling_3d_df['actual'],
                 name='Actual',
                 marker=dict(
                     color='#10b981',
-                    opacity=0.7,
-                    line=dict(color='#059669', width=1)
+                    opacity=0.65,
+                    line=dict(color='#059669', width=0.5)
                 ),
+                width=2000000,
                 hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
+            ))
+            
+            # Predicted line (clean line without cluttered labels)
+            fig_roll.add_trace(go.Scatter(
+                x=rolling_3d_df['target_at'],
+                y=rolling_3d_df['predicted'],
+                mode='lines+markers',
+                name='Predicted (24H)',
+                line=dict(color='#818cf8', width=3),
+                marker=dict(size=6, color='#818cf8', symbol='circle', line=dict(color='#4f46e5', width=1)),
+                hovertemplate='<b>%{x}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
             ))
 
             # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
@@ -2372,6 +2370,7 @@ def main():
                 plot_bgcolor=plot_panel_bg,
                 font=dict(size=11, color=plot_text_color),
                 margin=dict(t=45, b=35, l=60, r=40),
+                showlegend=True,
                 legend=dict(
                     orientation='h',
                     yanchor='bottom',
@@ -2381,7 +2380,7 @@ def main():
                     bgcolor=plot_legend_bg,
                     bordercolor=plot_border,
                     borderwidth=1,
-                    font=dict(color=plot_text_color)
+                    font=dict(color=plot_text_color, size=11)
                 ),
                 xaxis=dict(
                     gridcolor=plot_grid_color,
@@ -2396,7 +2395,8 @@ def main():
                     title_font=dict(color=plot_text_color),
                     tickformat='$,.0f',
                     range=[y_axis_min, y_axis_max]
-                )
+                ),
+                bargap=0.15
             )
             st.plotly_chart(fig_roll, width='stretch')
         else:
