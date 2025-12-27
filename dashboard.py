@@ -2275,6 +2275,11 @@ def main():
 
     # Store predictions now for future historical charts (best-effort)
     _append_prediction_log(prediction_cards, float(current_price))
+    
+    # Update 24H validation: create new prediction record and fill actuals for due predictions
+    predicted_24h_card = next((c for c in prediction_cards if c['horizon'] == '24H'), None)
+    if predicted_24h_card:
+        _update_24h_validation(price_data, predicted_24h_card['predicted_price'])
 
     # Use 3-day rolling validation accuracy for status strip
     accuracy_text = "Accuracy: collecting"
