@@ -2153,16 +2153,16 @@ def main():
         st.error("Failed to load model. Please check the model files.")
         st.stop()
 
-    # DB-based 3-day rolling validation using actual predictions with actuals
+    # DB-based 7-day rolling validation using actual predictions with actuals
     rolling_3d_df = pd.DataFrame()
     rolling_err: str | None = None
-    rolling_text = "Live Validation (Last 3 Days – DB Actuals): unavailable"
+    rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
     rolling_acc = None
     rolling_n = 0
     try:
-        # Load validation records from DB (last 3 days where actual_24h IS NOT NULL)
+        # Load validation records from DB (last 7 days where actual_24h IS NOT NULL)
         all_records = _load_validation_records()
-        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=3)
+        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=7)
         
         rows = []
         for r in all_records:
@@ -2188,11 +2188,11 @@ def main():
             rolling_n = int(n_roll)
             rolling_acc = acc_roll
             if n_roll > 0 and acc_roll is not None:
-                rolling_text = f"Live Validation (Last 3 Days – DB Actuals): {acc_roll:.1f}% (N={n_roll})"
+                rolling_text = f"Live Validation (Last 7 Days – DB Actuals): {acc_roll:.1f}% (N={n_roll})"
             elif n_roll > 0:
-                rolling_text = f"Live Validation (Last 3 Days – DB Actuals): collecting (N={n_roll})"
+                rolling_text = f"Live Validation (Last 7 Days – DB Actuals): collecting (N={n_roll})"
     except Exception as e:
-        rolling_text = "Live Validation (Last 3 Days – DB Actuals): unavailable"
+        rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
         rolling_acc = None
         rolling_n = 0
         rolling_err = str(e)
@@ -2281,12 +2281,12 @@ def main():
     if predicted_24h_card:
         _update_24h_validation(price_data, predicted_24h_card['predicted_price'])
 
-    # Use 3-day rolling validation accuracy for status strip
+    # Use 7-day rolling validation accuracy for status strip
     accuracy_text = "Accuracy: collecting"
     if rolling_n > 0 and rolling_acc is not None:
-        accuracy_text = f"Accuracy (3D Rolling – DB Actuals): {rolling_acc:.1f}% (N={rolling_n})"
+        accuracy_text = f"Accuracy (7D Rolling – DB Actuals): {rolling_acc:.1f}% (N={rolling_n})"
     elif rolling_n > 0:
-        accuracy_text = f"Accuracy (3D Rolling): collecting (N={rolling_n})"
+        accuracy_text = f"Accuracy (7D Rolling): collecting (N={rolling_n})"
 
     status_ph.markdown(
         _render_status_strip(
@@ -2317,7 +2317,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Validation: Predicted vs Actual (Last 3 Days)
+    # Validation: Predicted vs Actual (Last 7 Days)
     if isinstance(rolling_3d_df, pd.DataFrame) and not rolling_3d_df.empty:
         n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
         st.caption(
@@ -2375,7 +2375,7 @@ def main():
         title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
         fig_roll.update_layout(
             title=dict(
-                text=f"3-Day Rolling Validation: Predicted vs Actual{title_suffix}",
+                text=f"7-Day Rolling Validation: Predicted vs Actual{title_suffix}",
                 font=dict(size=13, color=plot_title_color, weight=600)
             ),
             xaxis_title='Date',
@@ -2419,7 +2419,7 @@ def main():
         st.plotly_chart(fig_roll, width='stretch')
     else:
         st.info(
-            "✨ 3-day rolling validation will appear once predictions have matured (24+ hours after prediction time). "
+            "✨ 7-day rolling validation will appear once predictions have matured (24+ hours after prediction time). "
             "Your predictions ARE being saved to the database. Currently have {} prediction records stored.".format(len(_load_prediction_log()))
         )
 
@@ -2714,14 +2714,14 @@ def main():
         st.plotly_chart(fig_conf, width='stretch')
     
     # Historical Price Chart (Actual only for now)
-    recent = _ensure_datetime_index(price_data).tail(72)  # last 3 days @ 1H
+    recent = _ensure_datetime_index(price_data).tail(168)  # last 7 days @ 1H
     if isinstance(recent.index, pd.DatetimeIndex) and len(recent) > 0 and 'close' in recent.columns:
         fig_historical = go.Figure()
         fig_historical.add_trace(go.Scatter(
             x=recent.index,
             y=recent['close'].astype(float),
             mode='lines',
-            name='BTC Actual Price (Last 3D)',
+            name='BTC Actual Price (Last 7D)',
             line=dict(color=plot_line_color, width=2),
             fill='tozeroy',
             fillcolor='rgba(99, 102, 241, 0.1)',
@@ -2733,7 +2733,7 @@ def main():
 
         fig_historical.update_layout(
             title=dict(
-                text='BTC Price (Last 3 Days)',
+                text='BTC Price (Last 7 Days)',
                 font=dict(size=16, color=plot_title_color, weight=600)
             ),
             xaxis_title='Date',
@@ -2774,7 +2774,7 @@ def main():
         st.plotly_chart(fig_historical, width='stretch')
         with st.expander("Data diagnostics", expanded=False):
             st.caption(_format_price_data_diagnostics(price_data, current_price=current_price))
-        st.caption("✅ Predictions are being saved to database. The '3-Day Validation' chart above shows predicted vs actual when enough predictions have matured (24h+).")
+        st.caption("✅ Predictions are being saved to database. The '7-Day Validation' chart above shows predicted vs actual when enough predictions have matured (24h+).")
     else:
         st.info("Not enough data to render the last-7-days chart yet.")
     
