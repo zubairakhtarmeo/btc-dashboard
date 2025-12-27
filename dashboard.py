@@ -2414,7 +2414,8 @@ def main():
         st.plotly_chart(fig_roll, width='stretch')
     else:
         st.info(
-            "3-day rolling validation will appear once predictions have actual prices (24 hours after prediction time)."
+            "✨ 3-day rolling validation will appear once predictions have matured (24+ hours after prediction time). "
+            "Your predictions ARE being saved to the database. Currently have {} prediction records stored.".format(len(_load_prediction_log()))
         )
 
         try:
@@ -2708,14 +2709,14 @@ def main():
         st.plotly_chart(fig_conf, width='stretch')
     
     # Historical Price Chart (Actual only for now)
-    recent = _ensure_datetime_index(price_data).tail(168)  # last 7 days @ 1H
+    recent = _ensure_datetime_index(price_data).tail(72)  # last 3 days @ 1H
     if isinstance(recent.index, pd.DatetimeIndex) and len(recent) > 0 and 'close' in recent.columns:
         fig_historical = go.Figure()
         fig_historical.add_trace(go.Scatter(
             x=recent.index,
             y=recent['close'].astype(float),
             mode='lines',
-            name='BTC Actual Price (Last 7D)',
+            name='BTC Actual Price (Last 3D)',
             line=dict(color=plot_line_color, width=2),
             fill='tozeroy',
             fillcolor='rgba(99, 102, 241, 0.1)',
@@ -2727,7 +2728,7 @@ def main():
 
         fig_historical.update_layout(
             title=dict(
-                text='BTC Price (Last 7 Days)',
+                text='BTC Price (Last 3 Days)',
                 font=dict(size=16, color=plot_title_color, weight=600)
             ),
             xaxis_title='Date',
@@ -2768,7 +2769,7 @@ def main():
         st.plotly_chart(fig_historical, width='stretch')
         with st.expander("Data diagnostics", expanded=False):
             st.caption(_format_price_data_diagnostics(price_data, current_price=current_price))
-        st.caption("Prediction history is being recorded from now. In ~7–8 days we can enable a second line using real stored predictions vs actual.")
+        st.caption("✅ Predictions are being saved to database. The '3-Day Validation' chart above shows predicted vs actual when enough predictions have matured (24h+).")
     else:
         st.info("Not enough data to render the last-7-days chart yet.")
     
