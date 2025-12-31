@@ -2348,7 +2348,7 @@ def main():
         rolling_viz_df['date'] = pd.to_datetime(rolling_viz_df['target_at']).dt.date
         daily_agg = rolling_viz_df.groupby('date').agg({
             'predicted': 'mean',
-            'actual': 'mean'
+            'actual': 'max'
         }).reset_index()
         
         # Convert date to datetime for plotting
