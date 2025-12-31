@@ -20,6 +20,7 @@ import pickle
 import subprocess
 import sys
 import textwrap
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,6 +81,54 @@ CACHED_PRICE_PATH = BASE_DIR / 'cache' / 'price_data.pkl'
 CACHED_SIMPLE_FEATURES_PATH = BASE_DIR / 'cache' / 'simple_features.pkl'
 
 
+# Cache DB fetches briefly and prefer recent local cache to reduce cold-start latency.
+_DB_CACHE_TTL_S = int(os.getenv('DASHBOARD_DB_CACHE_TTL_S', '120'))
+_LOCAL_CACHE_FRESH_S = int(os.getenv('DASHBOARD_LOCAL_CACHE_FRESH_S', '300'))
+
+
+def _run_in_background(fn, *args, **kwargs) -> None:
+    """Run a best-effort background task to avoid blocking first render."""
+    try:
+        t = threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
+        t.start()
+    except Exception:
+        return
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cleanup_bad_validation_records_cached() -> int:
+    try:
+        return int(cleanup_bad_validation_records() or 0)
+    except Exception:
+        return 0
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL_S, show_spinner=False)
+def _fetch_validation_records_from_supabase(days: int) -> list[dict]:
+    try:
+        return list(get_validation_history(days=int(days)) or [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL_S, show_spinner=False)
+def _fetch_prediction_log_from_supabase(days: int) -> list[dict]:
+    try:
+        return list(get_prediction_log_history(days=int(days)) or [])
+    except Exception:
+        return []
+
+
+def _is_cache_file_fresh(path: Path, *, fresh_s: int) -> bool:
+    try:
+        if not path.exists():
+            return False
+        age_s = max(0.0, (pd.Timestamp.utcnow().timestamp() - float(path.stat().st_mtime)))
+        return age_s <= float(fresh_s)
+    except Exception:
+        return False
+
+
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure df has a UTC DatetimeIndex; never raises."""
     try:
@@ -115,28 +164,43 @@ def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_validation_records() -> list[dict]:
     """Load validation records from Supabase first, fall back to local cache."""
-    # Try loading from Supabase first (survives app restarts)
-    try:
-        db_records = get_validation_history(days=30)
-        if db_records:
-            print(f"[DASHBOARD] Loaded {len(db_records)} validation records from Supabase")
-            return db_records
-    except Exception as e:
-        print(f"[DASHBOARD] Could not load from Supabase: {e}")
-    
-    # Fall back to local file cache
+    # Prefer fresh local cache (fast) to avoid DB/network latency on every session.
     try:
         if not VALIDATION_24H_PATH.exists():
-            return []
+            raise FileNotFoundError
         with open(VALIDATION_24H_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, list):
             local_records = [r for r in data if isinstance(r, dict)]
-            print(f"[DASHBOARD] Loaded {len(local_records)} validation records from local cache")
-            return local_records
-        return []
+            if local_records and _is_cache_file_fresh(VALIDATION_24H_PATH, fresh_s=_LOCAL_CACHE_FRESH_S):
+                print(f"[DASHBOARD] Loaded {len(local_records)} validation records from local cache (fresh)")
+                return local_records
+            # Keep a stale local copy as fallback if DB is unavailable.
+            stale_local_records = local_records
+        else:
+            stale_local_records = []
     except Exception:
-        return []
+        stale_local_records = []
+
+    # Try loading from Supabase (cached briefly across sessions)
+    try:
+        db_records = _fetch_validation_records_from_supabase(days=30)
+        if db_records:
+            print(f"[DASHBOARD] Loaded {len(db_records)} validation records from Supabase")
+            # Update local cache for faster subsequent loads
+            try:
+                VALIDATION_24H_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(VALIDATION_24H_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(db_records, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return db_records
+    except Exception as e:
+        print(f"[DASHBOARD] Could not load from Supabase: {e}")
+
+    if stale_local_records:
+        print(f"[DASHBOARD] Loaded {len(stale_local_records)} validation records from local cache (stale)")
+    return stale_local_records
 
 
 def _save_validation_records(records: list[dict]) -> None:
@@ -159,7 +223,7 @@ def _save_validation_records(records: list[dict]) -> None:
     
     # Also sync to Supabase (happens in background, non-blocking)
     try:
-        sync_validation_24h_records(records)
+        _run_in_background(sync_validation_24h_records, records)
     except Exception as e:
         print(f"[DASHBOARD] Could not sync to Supabase: {e}")
 
@@ -314,28 +378,42 @@ def _update_24h_validation(price_data: pd.DataFrame, predicted_24h: float) -> tu
 
 def _load_prediction_log() -> list[dict]:
     """Load prediction log from Supabase first, fall back to local cache."""
-    # Try loading from Supabase first (survives app restarts)
-    try:
-        db_records = get_prediction_log_history(days=7)
-        if db_records:
-            print(f"[DASHBOARD] Loaded {len(db_records)} prediction log records from Supabase")
-            return db_records
-    except Exception as e:
-        print(f"[DASHBOARD] Could not load prediction log from Supabase: {e}")
-    
-    # Fall back to local file cache
+    # Prefer fresh local cache (fast) to avoid DB/network latency on every session.
     try:
         if not PREDICTION_LOG_PATH.exists():
-            return []
+            raise FileNotFoundError
         with open(PREDICTION_LOG_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if isinstance(data, list):
             local_records = [r for r in data if isinstance(r, dict)]
-            print(f"[DASHBOARD] Loaded {len(local_records)} prediction log records from local cache")
-            return local_records
-        return []
+            if local_records and _is_cache_file_fresh(PREDICTION_LOG_PATH, fresh_s=_LOCAL_CACHE_FRESH_S):
+                print(f"[DASHBOARD] Loaded {len(local_records)} prediction log records from local cache (fresh)")
+                return local_records
+            stale_local_records = local_records
+        else:
+            stale_local_records = []
     except Exception:
-        return []
+        stale_local_records = []
+
+    # Try loading from Supabase (cached briefly across sessions)
+    try:
+        db_records = _fetch_prediction_log_from_supabase(days=7)
+        if db_records:
+            print(f"[DASHBOARD] Loaded {len(db_records)} prediction log records from Supabase")
+            # Update local cache for faster subsequent loads
+            try:
+                PREDICTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(PREDICTION_LOG_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(db_records, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return db_records
+    except Exception as e:
+        print(f"[DASHBOARD] Could not load prediction log from Supabase: {e}")
+
+    if stale_local_records:
+        print(f"[DASHBOARD] Loaded {len(stale_local_records)} prediction log records from local cache (stale)")
+    return stale_local_records
 
 
 def _save_prediction_log(records: list[dict]) -> None:
@@ -414,7 +492,7 @@ def _append_prediction_log(prediction_cards: list[dict], current_price: float) -
         _save_prediction_log(records)
 
         if appended:
-            sync_prediction_log_records(appended)
+            _run_in_background(sync_prediction_log_records, appended)
     except Exception:
         return
 
@@ -2130,7 +2208,7 @@ def main():
     
     # Clean up any bad validation records from previous scaling bugs (one-time cleanup)
     try:
-        deleted = cleanup_bad_validation_records()
+        deleted = _cleanup_bad_validation_records_cached()
         if deleted > 0:
             print(f"[DASHBOARD] Cleaned {deleted} bad validation records on startup", flush=True)
     except Exception as e:
