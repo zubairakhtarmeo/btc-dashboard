@@ -2159,20 +2159,31 @@ def main():
     rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
     rolling_acc = None
     rolling_n = 0
+    all_time_acc = None
+    all_time_n = 0
     try:
         # Load validation records from DB (last 7 days where actual_24h IS NOT NULL)
         all_records = _load_validation_records()
         cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=7)
         
         rows = []
+        all_time_rows = []
         for r in all_records:
             actual = r.get('actual_24h')
             predicted = r.get('predicted_24h')
             target_at = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
             
-            # Row eligibility: actual IS NOT NULL and within last 3 days
+            # Row eligibility: actual IS NOT NULL
             if actual is None or predicted is None or target_at is pd.NaT:
                 continue
+
+            all_time_rows.append({
+                'target_at': target_at,
+                'predicted': float(predicted),
+                'actual': float(actual)
+            })
+
+            # Keep graph data limited to last 7 days
             if target_at < cutoff:
                 continue
             
@@ -2182,6 +2193,12 @@ def main():
                 'actual': float(actual)
             })
         
+        if all_time_rows:
+            all_time_df = pd.DataFrame(all_time_rows).sort_values('target_at')
+            n_all, _med_ape_all, acc_all = _accuracy_from_pred_actual_df(all_time_df)
+            all_time_n = int(n_all)
+            all_time_acc = acc_all
+
         if rows:
             rolling_3d_df = pd.DataFrame(rows).sort_values('target_at')
             n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
@@ -2195,6 +2212,8 @@ def main():
         rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
         rolling_acc = None
         rolling_n = 0
+        all_time_acc = None
+        all_time_n = 0
         rolling_err = str(e)
     
     # Compact centered price panel (contained instrument panel)
@@ -2281,12 +2300,12 @@ def main():
     if predicted_24h_card:
         _update_24h_validation(price_data, predicted_24h_card['predicted_price'])
 
-    # Use 7-day rolling validation accuracy for status strip
+    # Use ALL-TIME validation accuracy for status strip (graph remains 7 days)
     accuracy_text = "Accuracy: collecting"
-    if rolling_n > 0 and rolling_acc is not None:
-        accuracy_text = f"Accuracy (7D Rolling – DB Actuals): {rolling_acc:.1f}% (N={rolling_n})"
-    elif rolling_n > 0:
-        accuracy_text = f"Accuracy (7D Rolling): collecting (N={rolling_n})"
+    if all_time_n > 0 and all_time_acc is not None:
+        accuracy_text = f"Accuracy (All Time – DB Actuals): {all_time_acc:.1f}% (N={all_time_n})"
+    elif all_time_n > 0:
+        accuracy_text = f"Accuracy (All Time): collecting (N={all_time_n})"
 
     status_ph.markdown(
         _render_status_strip(
