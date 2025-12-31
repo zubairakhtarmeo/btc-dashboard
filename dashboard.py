@@ -1274,6 +1274,76 @@ st.markdown("""
         0%, 100% { opacity: 1; }
         50% { opacity: 0.5; }
     }
+
+    /* Loading Card (first-paint friendly) */
+    .loading-card {
+        max-width: 1100px;
+        width: 100%;
+        margin: 0.25rem auto 1.25rem auto;
+        background: var(--dsba-card-gradient);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid var(--dsba-border);
+        border-radius: 16px;
+        padding: 1.1rem 1.25rem;
+        box-shadow: var(--dsba-shadow);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .loading-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: linear-gradient(90deg, var(--dsba-accent), var(--dsba-accent-2), var(--dsba-accent-3));
+        opacity: 0.6;
+    }
+
+    .loading-title {
+        color: var(--dsba-text);
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: -0.2px;
+        margin: 0 0 0.25rem 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .loading-subtitle {
+        color: var(--dsba-text-2);
+        font-size: 0.85rem;
+        font-weight: 500;
+        margin: 0 0 0.9rem 0;
+    }
+
+    .skeleton-line {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        overflow: hidden;
+        position: relative;
+        margin: 0.45rem 0;
+    }
+
+    .skeleton-line::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.22), transparent);
+        animation: shimmer 1.8s infinite;
+    }
+
+    .skeleton-line.w1 { width: 68%; }
+    .skeleton-line.w2 { width: 52%; }
+    .skeleton-line.w3 { width: 80%; }
     
     /* Responsive */
     @media (max-width: 768px) {
@@ -2010,8 +2080,45 @@ def main():
     status_ph.markdown(
         _render_status_strip(
             utc_hms=datetime.now(timezone.utc).strftime('%H:%M:%S'),
-            accuracy_text="Accuracy: calculating…",
+            accuracy_text="Accuracy: loading…",
         ),
+        unsafe_allow_html=True,
+    )
+
+    # Placeholders so the UI doesn't look frozen on refresh
+    price_panel_ph = st.empty()
+    loading_ph = st.empty()
+
+    price_panel_ph.markdown(
+        """<div class=\"price-panel\">
+<div class=\"price-meta left\">
+    <div class=\"meta-label\">24H Change</div>
+    <div class=\"meta-value\">—</div>
+    <div class=\"meta-label\" style=\"margin-top: 0.5rem;\">Status</div>
+    <div class=\"meta-value\" style=\"color: var(--dsba-warning);\">● Loading</div>
+</div>
+<div class=\"price-center\">
+    <div class=\"price-center-label\"><span class=\"btc-icon\">₿</span> Bitcoin Price</div>
+    <div class=\"price-center-value loading-pulse\">Loading…</div>
+</div>
+<div class=\"price-meta right\">
+    <div class=\"meta-label\">Interval</div>
+    <div class=\"meta-value\">1H Candles</div>
+    <div class=\"meta-label\" style=\"margin-top: 0.5rem;\">Data Points</div>
+    <div class=\"meta-value\">—</div>
+</div>
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+    loading_ph.markdown(
+        """<div class=\"loading-card\">
+  <div class=\"loading-title\"><span class=\"status-dot\" style=\"width:7px;height:7px;\"></span> Loading dashboard</div>
+  <div class=\"loading-subtitle\">Initializing market data and AI engine. This can take a few seconds after refresh.</div>
+  <div class=\"skeleton-line w1\"></div>
+  <div class=\"skeleton-line w2\"></div>
+  <div class=\"skeleton-line w3\"></div>
+</div>""",
         unsafe_allow_html=True,
     )
 
@@ -2103,6 +2210,16 @@ def main():
     
     # IMPORTANT: Fetch data FIRST, before loading TensorFlow
     # This prevents TensorFlow segfaults when data fetch fails on Streamlit Cloud
+    loading_ph.markdown(
+        """<div class=\"loading-card\">
+  <div class=\"loading-title\"><span class=\"status-dot\" style=\"width:7px;height:7px;\"></span> Fetching live market data</div>
+  <div class=\"loading-subtitle\">Connecting to providers and building the latest candle series.</div>
+  <div class=\"skeleton-line w1\"></div>
+  <div class=\"skeleton-line w2\"></div>
+  <div class=\"skeleton-line w3\"></div>
+</div>""",
+        unsafe_allow_html=True,
+    )
     with st.spinner("📡 Fetching Live Market Data..."):
         cached_history_mtime = float(CACHED_PRICE_PATH.stat().st_mtime) if CACHED_PRICE_PATH.exists() else 0.0
         current_price, price_data, error = fetch_live_data(
@@ -2142,8 +2259,46 @@ def main():
         except Exception:
             st.error("⚠️ Could not determine current price")
             st.stop()
+
+    # Render the hero panel ASAP with real data (prevents the “blank page” feel)
+    price_24h_ago = price_data['close'].iloc[-25] if len(price_data) >= 25 else price_data['close'].iloc[0]
+    change_24h = ((current_price - price_24h_ago) / price_24h_ago) * 100
+    change_class = "positive" if change_24h >= 0 else "negative"
+    change_symbol = "▲" if change_24h >= 0 else "▼"
+
+    price_panel_ph.markdown(
+        f"""<div class=\"price-panel\">
+<div class=\"price-meta left\">
+    <div class=\"meta-label\">24H Change</div>
+    <div class=\"meta-value {change_class}\">{change_symbol} {abs(change_24h):.2f}%</div>
+    <div class=\"meta-label\" style=\"margin-top: 0.5rem;\">Status</div>
+    <div class=\"meta-value\" style=\"color: var(--dsba-positive);\">● Live</div>
+</div>
+<div class=\"price-center\">
+    <div class=\"price-center-label\"><span class=\"btc-icon\">₿</span> Bitcoin Price</div>
+    <div class=\"price-center-value\">${current_price:,.2f}</div>
+</div>
+<div class=\"price-meta right\">
+    <div class=\"meta-label\">Interval</div>
+    <div class=\"meta-value\">1H Candles</div>
+    <div class=\"meta-label\" style=\"margin-top: 0.5rem;\">Data Points</div>
+    <div class=\"meta-value\">{len(price_data):,}</div>
+</div>
+</div>""",
+        unsafe_allow_html=True,
+    )
     
     # Now load model (TensorFlow) - data is already available
+    loading_ph.markdown(
+        """<div class=\"loading-card\">
+  <div class=\"loading-title\"><span class=\"status-dot\" style=\"width:7px;height:7px;\"></span> Loading AI engine</div>
+  <div class=\"loading-subtitle\">Warming up the forecasting model and scalers.</div>
+  <div class=\"skeleton-line w1\"></div>
+  <div class=\"skeleton-line w2\"></div>
+  <div class=\"skeleton-line w3\"></div>
+</div>""",
+        unsafe_allow_html=True,
+    )
     with st.spinner("🔄 Loading AI Engine..."):
         model_mtime = float(MODEL_PATH.stat().st_mtime) if MODEL_PATH.exists() else 0.0
         metadata_mtime = float(METADATA_PATH.stat().st_mtime) if METADATA_PATH.exists() else 0.0
@@ -2154,6 +2309,7 @@ def main():
         st.stop()
 
     # DB-based 7-day rolling validation using actual predictions with actuals
+    # (Run AFTER the hero panel is visible to avoid an “empty screen” on refresh)
     rolling_3d_df = pd.DataFrame()
     rolling_err: str | None = None
     rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
@@ -2161,93 +2317,21 @@ def main():
     rolling_n = 0
     all_time_acc = None
     all_time_n = 0
-    try:
-        # Load validation records from DB (last 7 days where actual_24h IS NOT NULL)
-        all_records = _load_validation_records()
-        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=7)
-        
-        rows = []
-        all_time_rows = []
-        for r in all_records:
-            actual = r.get('actual_24h')
-            predicted = r.get('predicted_24h')
-            target_at = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
-            
-            # Row eligibility: actual IS NOT NULL
-            if actual is None or predicted is None or target_at is pd.NaT:
-                continue
-
-            all_time_rows.append({
-                'target_at': target_at,
-                'predicted': float(predicted),
-                'actual': float(actual)
-            })
-
-            # Keep graph data limited to last 7 days
-            if target_at < cutoff:
-                continue
-            
-            rows.append({
-                'target_at': target_at,
-                'predicted': float(predicted),
-                'actual': float(actual)
-            })
-        
-        if all_time_rows:
-            all_time_df = pd.DataFrame(all_time_rows).sort_values('target_at')
-            n_all, _med_ape_all, acc_all = _accuracy_from_pred_actual_df(all_time_df)
-            all_time_n = int(n_all)
-            all_time_acc = acc_all
-
-        if rows:
-            rolling_3d_df = pd.DataFrame(rows).sort_values('target_at')
-            n_roll, med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
-            rolling_n = int(n_roll)
-            rolling_acc = acc_roll
-            if n_roll > 0 and acc_roll is not None:
-                rolling_text = f"Live Validation (Last 7 Days – DB Actuals): {acc_roll:.1f}% (N={n_roll})"
-            elif n_roll > 0:
-                rolling_text = f"Live Validation (Last 7 Days – DB Actuals): collecting (N={n_roll})"
-    except Exception as e:
-        rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
-        rolling_acc = None
-        rolling_n = 0
-        all_time_acc = None
-        all_time_n = 0
-        rolling_err = str(e)
-    
-    # Compact centered price panel (contained instrument panel)
-    price_24h_ago = price_data['close'].iloc[-25] if len(price_data) >= 25 else price_data['close'].iloc[0]
-    change_24h = ((current_price - price_24h_ago) / price_24h_ago) * 100
-    change_class = "positive" if change_24h >= 0 else "negative"
-    change_symbol = "▲" if change_24h >= 0 else "▼"
-
-    st.markdown(
-                f"""<div class="price-panel">
-<div class="price-meta left">
-    <div class="meta-label">24H Change</div>
-    <div class="meta-value {change_class}">{change_symbol} {abs(change_24h):.2f}%</div>
-    <div class="meta-label" style="margin-top: 0.5rem;">Status</div>
-    <div class="meta-value" style="color: var(--dsba-positive);">● Live</div>
-</div>
-<div class="price-center">
-    <div class="price-center-label"><span class="btc-icon">₿</span> Bitcoin Price</div>
-    <div class="price-center-value">${current_price:,.2f}</div>
-</div>
-<div class="price-meta right">
-    <div class="meta-label">Interval</div>
-    <div class="meta-value">1H Candles</div>
-    <div class="meta-label" style="margin-top: 0.5rem;">Data Points</div>
-    <div class="meta-value">{len(price_data):,}</div>
-</div>
-</div>""",
-        unsafe_allow_html=True,
-    )
 
     # Accuracy badge placeholder (updated after predictions/backtest are computed)
     price_accuracy_ph = st.empty()
     
     # Generate features and predictions
+    loading_ph.markdown(
+        """<div class=\"loading-card\">
+  <div class=\"loading-title\"><span class=\"status-dot\" style=\"width:7px;height:7px;\"></span> Generating AI predictions</div>
+  <div class=\"loading-subtitle\">Computing features and multi-horizon forecasts.</div>
+  <div class=\"skeleton-line w1\"></div>
+  <div class=\"skeleton-line w2\"></div>
+  <div class=\"skeleton-line w3\"></div>
+</div>""",
+        unsafe_allow_html=True,
+    )
     with st.spinner("🧠 Generating AI Predictions..."):
         features_df = None
         if bool(st.session_state.get('use_cached_features', False)) and CACHED_SIMPLE_FEATURES_PATH.exists():
@@ -2265,6 +2349,70 @@ def main():
         if features_df is None:
             features_df = add_simple_features(price_data)
         predictions = generate_predictions(predictor, metadata, features_df)
+
+    # Load validation records from DB (best-effort) AFTER predictions are ready
+    loading_ph.markdown(
+        """<div class=\"loading-card\">
+  <div class=\"loading-title\"><span class=\"status-dot\" style=\"width:7px;height:7px;\"></span> Updating accuracy</div>
+  <div class=\"loading-subtitle\">Pulling recent actuals to compute live validation.</div>
+  <div class=\"skeleton-line w1\"></div>
+  <div class=\"skeleton-line w2\"></div>
+  <div class=\"skeleton-line w3\"></div>
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+    try:
+        all_records = _load_validation_records()
+        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=7)
+        rows = []
+        all_time_rows = []
+
+        for r in all_records:
+            actual = r.get('actual_24h')
+            predicted = r.get('predicted_24h')
+            target_at = pd.to_datetime(r.get('target_at'), utc=True, errors='coerce')
+
+            if actual is None or predicted is None or target_at is pd.NaT:
+                continue
+
+            all_time_rows.append({
+                'target_at': target_at,
+                'predicted': float(predicted),
+                'actual': float(actual)
+            })
+
+            if target_at < cutoff:
+                continue
+
+            rows.append({
+                'target_at': target_at,
+                'predicted': float(predicted),
+                'actual': float(actual)
+            })
+
+        if all_time_rows:
+            all_time_df = pd.DataFrame(all_time_rows).sort_values('target_at')
+            n_all, _med_ape_all, acc_all = _accuracy_from_pred_actual_df(all_time_df)
+            all_time_n = int(n_all)
+            all_time_acc = acc_all
+
+        if rows:
+            rolling_3d_df = pd.DataFrame(rows).sort_values('target_at')
+            n_roll, _med_ape_roll, acc_roll = _accuracy_from_pred_actual_df(rolling_3d_df)
+            rolling_n = int(n_roll)
+            rolling_acc = acc_roll
+            if n_roll > 0 and acc_roll is not None:
+                rolling_text = f"Live Validation (Last 7 Days – DB Actuals): {acc_roll:.1f}% (N={n_roll})"
+            elif n_roll > 0:
+                rolling_text = f"Live Validation (Last 7 Days – DB Actuals): collecting (N={n_roll})"
+    except Exception as e:
+        rolling_text = "Live Validation (Last 7 Days – DB Actuals): unavailable"
+        rolling_acc = None
+        rolling_n = 0
+        all_time_acc = None
+        all_time_n = 0
+        rolling_err = str(e)
     
     # Prediction horizons
     horizons = [1, 6, 12, 24, 48, 72, 168]
@@ -2319,6 +2467,9 @@ def main():
         _render_price_accuracy_badge(accuracy_text),
         unsafe_allow_html=True,
     )
+
+    # Loading state complete
+    loading_ph.empty()
     
     # AI Predictions Section Header (keep it above the fold)
     st.markdown(
