@@ -20,7 +20,6 @@ import pickle
 import subprocess
 import sys
 import textwrap
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -84,23 +83,6 @@ CACHED_SIMPLE_FEATURES_PATH = BASE_DIR / 'cache' / 'simple_features.pkl'
 # Cache DB fetches briefly and prefer recent local cache to reduce cold-start latency.
 _DB_CACHE_TTL_S = int(os.getenv('DASHBOARD_DB_CACHE_TTL_S', '120'))
 _LOCAL_CACHE_FRESH_S = int(os.getenv('DASHBOARD_LOCAL_CACHE_FRESH_S', '300'))
-
-
-def _run_in_background(fn, *args, **kwargs) -> None:
-    """Run a best-effort background task to avoid blocking first render."""
-    try:
-        t = threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
-        t.start()
-    except Exception:
-        return
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _cleanup_bad_validation_records_cached() -> int:
-    try:
-        return int(cleanup_bad_validation_records() or 0)
-    except Exception:
-        return 0
 
 
 @st.cache_data(ttl=_DB_CACHE_TTL_S, show_spinner=False)
@@ -223,7 +205,7 @@ def _save_validation_records(records: list[dict]) -> None:
     
     # Also sync to Supabase (happens in background, non-blocking)
     try:
-        _run_in_background(sync_validation_24h_records, records)
+        sync_validation_24h_records(records)
     except Exception as e:
         print(f"[DASHBOARD] Could not sync to Supabase: {e}")
 
@@ -492,7 +474,7 @@ def _append_prediction_log(prediction_cards: list[dict], current_price: float) -
         _save_prediction_log(records)
 
         if appended:
-            _run_in_background(sync_prediction_log_records, appended)
+            sync_prediction_log_records(appended)
     except Exception:
         return
 
@@ -2208,7 +2190,7 @@ def main():
     
     # Clean up any bad validation records from previous scaling bugs (one-time cleanup)
     try:
-        deleted = _cleanup_bad_validation_records_cached()
+        deleted = cleanup_bad_validation_records()
         if deleted > 0:
             print(f"[DASHBOARD] Cleaned {deleted} bad validation records on startup", flush=True)
     except Exception as e:
