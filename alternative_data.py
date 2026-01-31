@@ -18,8 +18,12 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import logging
-from pytrends.request import TrendReq
 import time
+
+try:
+    from pytrends.request import TrendReq  # optional
+except Exception:
+    TrendReq = None
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,8 @@ class AlternativeDataCollector:
         
         # Initialize Google Trends
         try:
+            if TrendReq is None:
+                raise ImportError("pytrends is not installed")
             self.pytrends = TrendReq(hl='en-US', tz=360)
             self.trends_available = True
         except Exception as e:
