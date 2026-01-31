@@ -88,6 +88,7 @@ def main():
         n_features=features_df_clean.shape[1] - 1,  # Exclude 'close'
         architecture='hybrid',
         dropout_rate=0.3,
+        learning_rate=3e-4,
         use_mixed_precision=False
     )
     
