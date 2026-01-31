@@ -32,6 +32,8 @@ import streamlit.components.v1 as components
 # Delay heavy ML imports until needed to avoid native library crashes on startup
 from data_collector import CryptoDataCollector
 
+from simple_features import add_simple_features
+
 
 print("[DASHBOARD] Starting imports...", flush=True)
 
@@ -1376,65 +1378,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-def add_simple_features(df):
-    """Add basic features matching train_simple.py exactly"""
-    df = df.copy()
-    
-    # Basic returns
-    for h in [1, 6, 12, 24, 48, 168]:
-        df[f'return_{h}h'] = df['close'].pct_change(h)
-        df[f'log_return_{h}h'] = np.log1p(df[f'return_{h}h'])
-    
-    # Simple moving averages
-    for period in [7, 14, 21, 50, 100, 200]:
-        df[f'sma_{period}'] = df['close'].rolling(period).mean()
-        df[f'distance_sma_{period}'] = (df['close'] - df[f'sma_{period}']) / df[f'sma_{period}']
-    
-    # Volatility
-    for period in [7, 14, 21, 50]:
-        df[f'volatility_{period}'] = df['return_1h'].rolling(period).std()
-    
-    # Volume indicators
-    df['volume_sma_20'] = df['volume'].rolling(20).mean()
-    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
-    
-    # RSI
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df['rsi_14'] = 100 - (100 / (1 + rs))
-    
-    # MACD
-    ema_12 = df['close'].ewm(span=12).mean()
-    ema_26 = df['close'].ewm(span=26).mean()
-    df['macd'] = ema_12 - ema_26
-    df['macd_signal'] = df['macd'].ewm(span=9).mean()
-    df['macd_histogram'] = df['macd'] - df['macd_signal']
-    
-    # Bollinger Bands
-    df['bb_middle'] = df['close'].rolling(20).mean()
-    bb_std = df['close'].rolling(20).std()
-    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
-    df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
-    # ATR
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    df['atr_14'] = true_range.rolling(14).mean()
-    df['atr_ratio'] = df['atr_14'] / df['close']
-    
-    # Momentum
-    df['momentum_consistency'] = (
-        np.sign(df['return_1h']) == np.sign(df['return_6h'])
-    ).astype(int)
-    
-    return df.dropna()
+@st.cache_data(ttl=300)
+def _fetch_recent_news(hours_back: int = 72) -> pd.DataFrame | None:
+    """Fetch recent news (best-effort). Cached to avoid hammering APIs."""
+    try:
+        collector = CryptoDataCollector(use_cache=False)
+        news_df = collector.news_collector.get_news('bitcoin', hours_back=int(hours_back))
+        return news_df
+    except Exception:
+        return None
 
 @st.cache_resource
 def load_model_and_predictor(model_mtime: float, metadata_mtime: float):
@@ -1526,12 +1478,11 @@ def fetch_live_data(use_cached_history: bool, cached_history_mtime: float):
             except Exception:
                 current_price = None
 
-        # Only blend live price into the last candle if it's close to the historical last close.
-        # This prevents a confusing vertical "cliff" when the historical series is stale/flat.
+        # Always blend the live price into the last candle.
+        # During shocks (often >1% move), refusing to blend makes the model blind to the move.
         try:
-            last_close = float(price_data['close'].iloc[-1])
-            if current_price is not None and last_close > 0 and abs(float(current_price) - last_close) / last_close <= 0.01:
-                price_data.iloc[-1, price_data.columns.get_loc('close')] = current_price
+            if current_price is not None and 'close' in price_data.columns and len(price_data) > 0:
+                price_data.iloc[-1, price_data.columns.get_loc('close')] = float(current_price)
         except Exception:
             pass
         
@@ -2334,6 +2285,21 @@ def main():
     )
     with st.spinner("🧠 Generating AI Predictions..."):
         features_df = None
+        news_df = None
+
+        # Only fetch news if the model expects news/geopolitics features.
+        try:
+            fn = set(metadata.get('feature_names') or [])
+            expects_news = any(
+                k.startswith('news_') or k.startswith('geo_')
+                for k in fn
+            )
+        except Exception:
+            expects_news = False
+
+        if expects_news:
+            news_df = _fetch_recent_news(hours_back=72)
+
         if bool(st.session_state.get('use_cached_features', False)) and CACHED_SIMPLE_FEATURES_PATH.exists():
             try:
                 cached_features = pd.read_pickle(str(CACHED_SIMPLE_FEATURES_PATH))
@@ -2347,7 +2313,7 @@ def main():
                 features_df = None
 
         if features_df is None:
-            features_df = add_simple_features(price_data)
+            features_df = add_simple_features(price_data, news_df=news_df)
         predictions = generate_predictions(predictor, metadata, features_df)
 
     # Load validation records from DB (best-effort) AFTER predictions are ready
