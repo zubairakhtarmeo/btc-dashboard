@@ -30,6 +30,25 @@ def main():
     
     price_df = data['price'].copy()
     news_df = data.get('news')
+    alt_bundle = {
+        'derivatives': None,
+        'funding_rates': None,
+        'liquidations': None,
+        'options_flow': None,
+    }
+    try:
+        from alternative_data import AlternativeDataCollector
+
+        alt = AlternativeDataCollector(api_keys={})
+        alt_bundle = {
+            'derivatives': alt.get_derivatives_data('bitcoin'),
+            'funding_rates': alt.get_funding_rates('bitcoin'),
+            'liquidations': alt.get_liquidation_data('bitcoin'),
+            'options_flow': alt.get_options_flow('bitcoin'),
+        }
+        logger.info("✓ Collected derivatives/liquidations (best-effort)")
+    except Exception:
+        logger.info("ℹ️  Derivatives/liquidations not available (optional)")
     logger.info(f"✓ Collected {len(price_df)} price records")
     logger.info(f"✓ Date range: {price_df.index.min()} to {price_df.index.max()}")
     logger.info(f"✓ Price range: ${price_df['close'].min():.2f} - ${price_df['close'].max():.2f}")
@@ -37,7 +56,14 @@ def main():
     
     # 2. Add features (simple technicals + explicit news/geopolitics signals)
     logger.info("🔧 Step 2: Adding features (technicals + news/geopolitics)...")
-    features_df = add_simple_features(price_df, news_df=news_df)
+    features_df = add_simple_features(
+        price_df,
+        news_df=news_df,
+        derivatives_df=alt_bundle.get('derivatives'),
+        funding_df=alt_bundle.get('funding_rates'),
+        liquidations_df=alt_bundle.get('liquidations'),
+        options_df=alt_bundle.get('options_flow'),
+    )
     
     logger.info(f"✓ Created {features_df.shape[1]} features")
     logger.info(f"✓ Total samples: {len(features_df)}")
@@ -87,36 +113,61 @@ def main():
     print()
     
     # Prepare y_train_list
-    y_train_list = []
-    for horizon in predictor.prediction_horizons:
-        y_train_list.extend([
-            y_dict[f'price_{horizon}h'],
-            y_dict[f'direction_{horizon}h'],
-            y_dict[f'volatility_{horizon}h']
-        ])
-    
-    # Train with callbacks
-    history = model.fit(
-        X, y_train_list,
-        validation_split=0.2,
-        epochs=20,
-        batch_size=32,
-        callbacks=[
-            tf.keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=5,
-                restore_best_weights=True,
-                verbose=1
-            ),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.5,
-                patience=3,
-                verbose=1
-            )
-        ],
-        verbose=1
-    )
+    if isinstance(model.output, dict) or (hasattr(model, 'output_names') and any(name in y_dict for name in model.output_names)):
+        y_train = {name: y_dict[name] for name in model.output_names if name in y_dict}
+        history = model.fit(
+            X,
+            y_train,
+            validation_split=0.2,
+            epochs=20,
+            batch_size=32,
+            callbacks=[
+                tf.keras.callbacks.EarlyStopping(
+                    monitor='val_loss',
+                    patience=5,
+                    restore_best_weights=True,
+                    verbose=1
+                ),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor='val_loss',
+                    factor=0.5,
+                    patience=3,
+                    verbose=1
+                )
+            ],
+            verbose=1
+        )
+    else:
+        y_train_list = []
+        for horizon in predictor.prediction_horizons:
+            y_train_list.extend([
+                y_dict[f'price_{horizon}h'],
+                y_dict[f'direction_{horizon}h'],
+                y_dict[f'volatility_{horizon}h']
+            ])
+
+        history = model.fit(
+            X,
+            y_train_list,
+            validation_split=0.2,
+            epochs=20,
+            batch_size=32,
+            callbacks=[
+                tf.keras.callbacks.EarlyStopping(
+                    monitor='val_loss',
+                    patience=5,
+                    restore_best_weights=True,
+                    verbose=1
+                ),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor='val_loss',
+                    factor=0.5,
+                    patience=3,
+                    verbose=1
+                )
+            ],
+            verbose=1
+        )
     
     print()
     logger.info("✅ Training complete!")
@@ -134,7 +185,7 @@ def main():
     predictions = predictor.predict_with_uncertainty(X[-10:])
     
     # Get current price
-    current_price = predictor.scaler_y.inverse_transform([[y_dict['price_1h'][-1]]])[0][0]
+    current_price = predictor.scaler_y.inverse_transform([[float(y_dict['price_1h'][-1, 0])]])[0][0]
     
     print()
     print("="*70)
