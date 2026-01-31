@@ -1627,7 +1627,16 @@ def compute_historical_backtest(
 
     feature_names = _metadata['feature_names']
     features_df_clean = features_df.select_dtypes(include=[np.number])
-    features = features_df_clean[feature_names]
+    
+    # Only use features that exist in both the generated data and model metadata
+    available_features = set(features_df_clean.columns)
+    required_features = [f for f in feature_names if f in available_features]
+    
+    # If major features are missing, warn but continue with available subset
+    if len(required_features) < len(feature_names) * 0.8:
+        debug['feature_mismatch'] = f"Model expects {len(feature_names)} features, only {len(required_features)} available"
+    
+    features = features_df_clean[required_features]
 
     predictor = _predictor
 

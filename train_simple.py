@@ -59,10 +59,11 @@ def main():
     features_df = add_simple_features(
         price_df,
         news_df=news_df,
-        derivatives_df=alt_bundle.get('derivatives'),
-        funding_df=alt_bundle.get('funding_rates'),
-        liquidations_df=alt_bundle.get('liquidations'),
-        options_df=alt_bundle.get('options_flow'),
+        # DISABLED: derivatives cause feature mismatch with dashboard (dashboard doesn't fetch these)
+        # derivatives_df=alt_bundle.get('derivatives'),
+        # funding_df=alt_bundle.get('funding_rates'),
+        # liquidations_df=alt_bundle.get('liquidations'),
+        # options_df=alt_bundle.get('options_flow'),
     )
     
     logger.info(f"✓ Created {features_df.shape[1]} features")
