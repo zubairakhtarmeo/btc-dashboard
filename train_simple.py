@@ -114,18 +114,50 @@ def main():
     print()
     
     # Prepare y_train_list
+    # Time-series safe split (keep order; no shuffle)
+    split = int(len(X) * 0.8)
+    X_train, X_val = X[:split], X[split:]
+
     if isinstance(model.output, dict) or (hasattr(model, 'output_names') and any(name in y_dict for name in model.output_names)):
-        y_train = {name: y_dict[name] for name in model.output_names if name in y_dict}
+        y_train = {name: y_dict[name][:split] for name in model.output_names if name in y_dict}
+        y_val = {name: y_dict[name][split:] for name in model.output_names if name in y_dict}
+        
+        # Calculate class weights for crash/pump heads (they are imbalanced - crashes/pumps are rare)
+        class_weight_dict = {}
+        for horizon in predictor.prediction_horizons:
+            # For crash head
+            crash_key = f'crash_{horizon}h'
+            if crash_key in y_train:
+                crash_pos_rate = float(np.mean(y_train[crash_key]))
+                if 0.01 < crash_pos_rate < 0.99:  # avoid division by zero
+                    neg_weight = crash_pos_rate
+                    pos_weight = 1.0 - crash_pos_rate
+                    class_weight_dict[crash_key] = {0: neg_weight, 1: pos_weight}
+                    logger.info(f"{crash_key}: {crash_pos_rate*100:.1f}% positive, weights: {{0:{neg_weight:.2f}, 1:{pos_weight:.2f}}}")
+            
+            # For pump head  
+            pump_key = f'pump_{horizon}h'
+            if pump_key in y_train:
+                pump_pos_rate = float(np.mean(y_train[pump_key]))
+                if 0.01 < pump_pos_rate < 0.99:
+                    neg_weight = pump_pos_rate
+                    pos_weight = 1.0 - pump_pos_rate
+                    class_weight_dict[pump_key] = {0: neg_weight, 1: pos_weight}
+                    logger.info(f"{pump_key}: {pump_pos_rate*100:.1f}% positive, weights: {{0:{neg_weight:.2f}, 1:{pos_weight:.2f}}}")
+        
         history = model.fit(
-            X,
+            X_train,
             y_train,
-            validation_split=0.2,
-            epochs=20,
+            validation_data=(X_val, y_val),
+            epochs=35,
             batch_size=32,
+            shuffle=False,
+            class_weight=class_weight_dict if class_weight_dict else None,
             callbacks=[
+                tf.keras.callbacks.TerminateOnNaN(),
                 tf.keras.callbacks.EarlyStopping(
                     monitor='val_loss',
-                    patience=5,
+                    patience=7,
                     restore_best_weights=True,
                     verbose=1
                 ),
@@ -133,6 +165,7 @@ def main():
                     monitor='val_loss',
                     factor=0.5,
                     patience=3,
+                    min_lr=1e-5,
                     verbose=1
                 )
             ],
@@ -148,15 +181,17 @@ def main():
             ])
 
         history = model.fit(
-            X,
-            y_train_list,
-            validation_split=0.2,
-            epochs=20,
+            X_train,
+            [arr[:split] for arr in y_train_list],
+            validation_data=(X_val, [arr[split:] for arr in y_train_list]),
+            epochs=35,
             batch_size=32,
+            shuffle=False,
             callbacks=[
+                tf.keras.callbacks.TerminateOnNaN(),
                 tf.keras.callbacks.EarlyStopping(
                     monitor='val_loss',
-                    patience=5,
+                    patience=7,
                     restore_best_weights=True,
                     verbose=1
                 ),
@@ -164,6 +199,7 @@ def main():
                     monitor='val_loss',
                     factor=0.5,
                     patience=3,
+                    min_lr=1e-5,
                     verbose=1
                 )
             ],
@@ -173,6 +209,40 @@ def main():
     print()
     logger.info("✅ Training complete!")
     print()
+
+    # 5.5 Sanity-check model outputs before saving (prevents overwriting with a diverged model)
+    try:
+        test_X = X_val[-1:].astype(np.float32) if len(X_val) else X[-1:].astype(np.float32)
+        test_pred = predictor.predict_with_uncertainty(test_X, n_samples=5)
+        # Use last observed close as baseline
+        baseline_close = float(features_df_clean['close'].iloc[-1])
+        bad = False
+        bad_reasons = []
+
+        for h in predictor.prediction_horizons:
+            pk = f'price_{h}h'
+            dk = f'direction_{h}h'
+            if pk not in test_pred:
+                continue
+            p_scaled = float(np.asarray(test_pred[pk][0]).reshape(-1)[0])
+            p = float(predictor.scaler_y.inverse_transform([[p_scaled]])[0][0])
+            if baseline_close > 0 and (p / baseline_close > 3.0 or p / baseline_close < (1.0 / 3.0)):
+                bad = True
+                bad_reasons.append(f"{h}h price ratio {p/baseline_close:.2f}x")
+            if dk in test_pred:
+                probs = np.asarray(test_pred[dk][0]).reshape(-1)
+                if probs.size == 3 and float(np.max(probs)) > 0.995:
+                    # Saturation across many horizons is a divergence smell
+                    bad = True
+                    bad_reasons.append(f"{h}h direction saturated")
+
+        if bad:
+            logger.error("❌ Model outputs look unstable; not saving artifacts.")
+            logger.error("Reasons: " + ", ".join(bad_reasons[:8]))
+            logger.error("Try re-running training (it should stabilize with the updated code).")
+            return
+    except Exception as e:
+        logger.warning(f"Sanity-check skipped due to error: {e}")
     
     # 6. Save model
     logger.info("💾 Step 6: Saving trained model...")

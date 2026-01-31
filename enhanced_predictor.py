@@ -215,9 +215,9 @@ class EnhancedCryptoPricePredictor:
             # Volatility
             outputs[f'volatility_{horizon}h'] = layers.Dense(1, activation='softplus', name=f'volatility_{horizon}h')(x)
 
-            # Tail-event risk heads
-            outputs[f'crash_{horizon}h'] = layers.Dense(1, activation='sigmoid', name=f'crash_{horizon}h')(x)
-            outputs[f'pump_{horizon}h'] = layers.Dense(1, activation='sigmoid', name=f'pump_{horizon}h')(x)
+            # DISABLED: Tail-event risk heads (causing instability)
+            # outputs[f'crash_{horizon}h'] = layers.Dense(1, activation='sigmoid', name=f'crash_{horizon}h')(x)
+            # outputs[f'pump_{horizon}h'] = layers.Dense(1, activation='sigmoid', name=f'pump_{horizon}h')(x)
 
         model = Model(inputs=inputs, outputs=outputs)
         
@@ -249,13 +249,14 @@ class EnhancedCryptoPricePredictor:
             loss_weights_dict[f'volatility_{horizon}h'] = weight_factor * 0.3
             metrics_dict[f'volatility_{horizon}h'] = ['mae']
 
-            loss_dict[f'crash_{horizon}h'] = 'binary_crossentropy'
-            loss_weights_dict[f'crash_{horizon}h'] = weight_factor * 0.2
-            metrics_dict[f'crash_{horizon}h'] = ['accuracy']
+            # DISABLED: crash/pump heads removed
+            # loss_dict[f'crash_{horizon}h'] = 'binary_crossentropy'
+            # loss_weights_dict[f'crash_{horizon}h'] = weight_factor * 0.2
+            # metrics_dict[f'crash_{horizon}h'] = ['accuracy']
 
-            loss_dict[f'pump_{horizon}h'] = 'binary_crossentropy'
-            loss_weights_dict[f'pump_{horizon}h'] = weight_factor * 0.2
-            metrics_dict[f'pump_{horizon}h'] = ['accuracy']
+            # loss_dict[f'pump_{horizon}h'] = 'binary_crossentropy'
+            # loss_weights_dict[f'pump_{horizon}h'] = weight_factor * 0.2
+            # metrics_dict[f'pump_{horizon}h'] = ['accuracy']
         
         optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
         
@@ -341,8 +342,9 @@ class EnhancedCryptoPricePredictor:
                 y_dict[f'price_p{q_label}_{horizon}h'] = []
             y_dict[f'direction_{horizon}h'] = []
             y_dict[f'volatility_{horizon}h'] = []
-            y_dict[f'crash_{horizon}h'] = []
-            y_dict[f'pump_{horizon}h'] = []
+            # DISABLED: crash/pump heads removed
+            # y_dict[f'crash_{horizon}h'] = []
+            # y_dict[f'pump_{horizon}h'] = []
         
         for i in range(len(data) - self.sequence_length - max_horizon):
             X.append(features_scaled[i:i + self.sequence_length])
@@ -370,9 +372,9 @@ class EnhancedCryptoPricePredictor:
                     direction = [0, 1, 0]  # Neutral
                 y_dict[f'direction_{horizon}h'].append(direction)
 
-                # Crash/pump targets (tail event classification)
-                y_dict[f'crash_{horizon}h'].append(1.0 if pct_change <= -self.crash_threshold_pct else 0.0)
-                y_dict[f'pump_{horizon}h'].append(1.0 if pct_change >= self.pump_threshold_pct else 0.0)
+                # DISABLED: Crash/pump targets removed
+                # y_dict[f'crash_{horizon}h'].append(1.0 if pct_change <= -self.crash_threshold_pct else 0.0)
+                # y_dict[f'pump_{horizon}h'].append(1.0 if pct_change >= self.pump_threshold_pct else 0.0)
                 
                 # Volatility target (std of returns in horizon window)
                 if future_idx + horizon < len(target):
