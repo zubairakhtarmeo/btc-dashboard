@@ -12,73 +12,10 @@ from enhanced_predictor import EnhancedCryptoPricePredictor
 import logging
 import tensorflow as tf
 
+from simple_features import add_simple_features
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-def add_simple_features(df):
-    """Add basic features that don't require 720+ hours of history"""
-    df = df.copy()
-    
-    # Basic returns (only need 168 hours history max)
-    for h in [1, 6, 12, 24, 48, 168]:
-        df[f'return_{h}h'] = df['close'].pct_change(h)
-        df[f'log_return_{h}h'] = np.log1p(df[f'return_{h}h'])
-    
-    # Simple moving averages (max 200 periods)
-    for period in [7, 14, 21, 50, 100, 200]:
-        df[f'sma_{period}'] = df['close'].rolling(period).mean()
-        df[f'distance_sma_{period}'] = (df['close'] - df[f'sma_{period}']) / df[f'sma_{period}']
-    
-    # Volatility (max 100 periods)
-    for period in [7, 14, 21, 50]:
-        df[f'volatility_{period}'] = df['return_1h'].rolling(period).std()
-    
-    # Volume indicators
-    df['volume_sma_20'] = df['volume'].rolling(20).mean()
-    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
-    
-    # RSI (14-period)
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df['rsi_14'] = 100 - (100 / (1 + rs))
-    
-    # MACD
-    ema_12 = df['close'].ewm(span=12).mean()
-    ema_26 = df['close'].ewm(span=26).mean()
-    df['macd'] = ema_12 - ema_26
-    df['macd_signal'] = df['macd'].ewm(span=9).mean()
-    df['macd_histogram'] = df['macd'] - df['macd_signal']
-    
-    # Bollinger Bands
-    df['bb_middle'] = df['close'].rolling(20).mean()
-    bb_std = df['close'].rolling(20).std()
-    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
-    df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
-    # ATR (Average True Range)
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    df['atr_14'] = true_range.rolling(14).mean()
-    df['atr_ratio'] = df['atr_14'] / df['close']
-    
-    # Momentum indicators
-    df['momentum_consistency'] = (
-        np.sign(df['return_1h']) == np.sign(df['return_6h'])
-    ).astype(int)
-    
-    # Remove rows with NaN (keep at least 250 rows = ~10 days minimal)
-    df_clean = df.dropna()
-    logger.info(f"Removed {len(df) - len(df_clean)} rows with NaN values")
-    logger.info(f"Remaining samples: {len(df_clean)}")
-    
-    return df_clean
 
 def main():
     print("="*70)
@@ -92,14 +29,15 @@ def main():
     data = collector.collect_all_data('bitcoin', hours_back=2000)
     
     price_df = data['price'].copy()
+    news_df = data.get('news')
     logger.info(f"✓ Collected {len(price_df)} price records")
     logger.info(f"✓ Date range: {price_df.index.min()} to {price_df.index.max()}")
     logger.info(f"✓ Price range: ${price_df['close'].min():.2f} - ${price_df['close'].max():.2f}")
     print()
     
-    # 2. Add simple features (only needs 200 periods max)
-    logger.info("🔧 Step 2: Adding simple features...")
-    features_df = add_simple_features(price_df)
+    # 2. Add features (simple technicals + explicit news/geopolitics signals)
+    logger.info("🔧 Step 2: Adding features (technicals + news/geopolitics)...")
+    features_df = add_simple_features(price_df, news_df=news_df)
     
     logger.info(f"✓ Created {features_df.shape[1]} features")
     logger.info(f"✓ Total samples: {len(features_df)}")
