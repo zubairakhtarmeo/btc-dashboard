@@ -256,7 +256,7 @@ class EnhancedCryptoPricePredictor:
             loss_weights_dict[f'pump_{horizon}h'] = weight_factor * 0.35
             metrics_dict[f'pump_{horizon}h'] = ['accuracy']
         
-        optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate)
+        optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
         
         model.compile(
             optimizer=optimizer,
