@@ -2565,6 +2565,26 @@ def main():
         )
         prediction_cards.append(card)
 
+    # Sanity check: if model outputs are wildly out of range, show a visible warning.
+    try:
+        if current_price and np.isfinite(float(current_price)) and float(current_price) > 0:
+            ratios = []
+            for c in prediction_cards:
+                p = c.get('predicted_price')
+                if p is None:
+                    continue
+                try:
+                    ratios.append(float(p) / float(current_price))
+                except Exception:
+                    continue
+            if ratios and (max(ratios) > 3.0 or min(ratios) < (1.0 / 3.0)):
+                st.warning(
+                    "Model outputs look unstable (some horizons are >3x or <1/3x current price). "
+                    "This usually means the latest retrain diverged — try retraining with the updated code (lower LR + gradient clipping)."
+                )
+    except Exception:
+        pass
+
     # Store predictions now for future historical charts (best-effort)
     _append_prediction_log(prediction_cards, float(current_price))
     
