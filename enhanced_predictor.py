@@ -120,7 +120,7 @@ class EnhancedCryptoPricePredictor:
         self.dropout_rate = dropout_rate
         self.learning_rate = learning_rate
         self.mc_dropout_samples = mc_dropout_samples
-        self.quantiles = list(quantiles or [0.1, 0.5, 0.9])
+        self.quantiles = []  # DISABLED: training with identical targets causes divergence
         self.crash_threshold_pct = float(crash_threshold_pct)
         self.pump_threshold_pct = float(pump_threshold_pct)
         
