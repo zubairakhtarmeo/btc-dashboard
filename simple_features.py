@@ -78,6 +78,53 @@ def _ensure_utc_dt(s: pd.Series) -> pd.Series:
     return out
 
 
+def _align_alt_timeseries(
+    price_index: pd.DatetimeIndex,
+    alt_df: pd.DataFrame | None,
+    *,
+    ts_col_candidates: Iterable[str] = ("timestamp", "fundingTime", "ts", "time"),
+    prefix: str,
+) -> pd.DataFrame:
+    """Align an alternative-data dataframe to the candle index non-leakily.
+
+    Semantics: for each candle time t, use the latest alt observation at-or-before t.
+    """
+    idx = pd.to_datetime(price_index, utc=True, errors="coerce")
+    idx = idx[~idx.isna()]
+    out = pd.DataFrame(index=idx)
+
+    if alt_df is None or not isinstance(alt_df, pd.DataFrame) or alt_df.empty:
+        return out
+
+    df = alt_df.copy()
+    ts_col = None
+    for c in ts_col_candidates:
+        if c in df.columns:
+            ts_col = c
+            break
+    if ts_col is None:
+        return out
+
+    df[ts_col] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+    df = df.dropna(subset=[ts_col])
+    if df.empty:
+        return out
+
+    # Keep only numeric columns (avoid huge objects)
+    numeric_cols = [c for c in df.columns if c != ts_col and pd.api.types.is_numeric_dtype(df[c])]
+    if not numeric_cols:
+        return out
+
+    df = df[[ts_col] + numeric_cols].sort_values(ts_col)
+    df["ts_hour"] = df[ts_col].dt.floor("h")
+    hourly = df.groupby("ts_hour", as_index=True)[numeric_cols].last().sort_index()
+
+    aligned = hourly.reindex(idx, method="ffill")
+    aligned = aligned.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    aligned = aligned.add_prefix(prefix)
+    return aligned
+
+
 def _lexicon_sentiment(text: str) -> float:
     """Very lightweight sentiment in [-1, 1]."""
     if not text:
@@ -215,6 +262,10 @@ def add_simple_features(
     price_df: pd.DataFrame,
     *,
     news_df: pd.DataFrame | None = None,
+    derivatives_df: pd.DataFrame | None = None,
+    funding_df: pd.DataFrame | None = None,
+    liquidations_df: pd.DataFrame | None = None,
+    options_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Create the simplified feature set, optionally enriched with news/geopolitics."""
     if price_df is None or not isinstance(price_df, pd.DataFrame) or len(price_df) == 0:
@@ -294,6 +345,18 @@ def add_simple_features(
     geo = build_news_geopolitics_features(df.index, news_df)
     for col in geo.columns:
         df[col] = geo[col].values
+
+    # Optional derivatives / liquidations / options features (best-effort)
+    deriv = _align_alt_timeseries(df.index, derivatives_df, prefix="deriv_")
+    fund = _align_alt_timeseries(df.index, funding_df, prefix="funding_")
+    liq = _align_alt_timeseries(df.index, liquidations_df, prefix="liq_")
+    opt = _align_alt_timeseries(df.index, options_df, prefix="options_")
+
+    for extra in (deriv, fund, liq, opt):
+        if extra is None or extra.empty:
+            continue
+        for col in extra.columns:
+            df[col] = extra[col].values
 
     df = df.replace([np.inf, -np.inf], np.nan)
     return df.dropna()
