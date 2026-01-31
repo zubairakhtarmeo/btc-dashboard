@@ -87,8 +87,8 @@ def main():
         prediction_horizons=[1, 6, 12, 24, 48, 72, 168],  # 1H, 6H, 12H, 24H, 48H, 72H, 7Days
         n_features=features_df_clean.shape[1] - 1,  # Exclude 'close'
         architecture='hybrid',
-        dropout_rate=0.3,
-        learning_rate=3e-4,
+        dropout_rate=0.4,  # Increased from 0.3
+        learning_rate=1e-4,  # Reduced from 3e-4
         use_mixed_precision=False
     )
     
@@ -149,7 +149,7 @@ def main():
             X_train,
             y_train,
             validation_data=(X_val, y_val),
-            epochs=35,
+            epochs=20,  # Reduced from 35
             batch_size=32,
             shuffle=False,
             class_weight=class_weight_dict if class_weight_dict else None,
@@ -157,15 +157,16 @@ def main():
                 tf.keras.callbacks.TerminateOnNaN(),
                 tf.keras.callbacks.EarlyStopping(
                     monitor='val_loss',
-                    patience=7,
+                    patience=3,  # MUCH stricter (was 7)
                     restore_best_weights=True,
-                    verbose=1
+                    verbose=1,
+                    min_delta=0.001  # Stop if not improving by 0.001
                 ),
                 tf.keras.callbacks.ReduceLROnPlateau(
                     monitor='val_loss',
                     factor=0.5,
-                    patience=3,
-                    min_lr=1e-5,
+                    patience=2,  # Stricter (was 3)
+                    min_lr=1e-6,  # Lower minimum
                     verbose=1
                 )
             ],
