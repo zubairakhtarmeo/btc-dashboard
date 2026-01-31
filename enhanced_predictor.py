@@ -238,7 +238,8 @@ class EnhancedCryptoPricePredictor:
                 q_label = int(round(float(q) * 100))
                 key = f'price_p{q_label}_{horizon}h'
                 loss_dict[key] = self._pinball_loss(q)
-                loss_weights_dict[key] = weight_factor * 0.6
+                # Quantiles are useful but can destabilize training if overweighted.
+                loss_weights_dict[key] = weight_factor * 0.2
 
             loss_dict[f'direction_{horizon}h'] = 'categorical_crossentropy'
             loss_weights_dict[f'direction_{horizon}h'] = weight_factor * 0.5
@@ -249,11 +250,11 @@ class EnhancedCryptoPricePredictor:
             metrics_dict[f'volatility_{horizon}h'] = ['mae']
 
             loss_dict[f'crash_{horizon}h'] = 'binary_crossentropy'
-            loss_weights_dict[f'crash_{horizon}h'] = weight_factor * 0.35
+            loss_weights_dict[f'crash_{horizon}h'] = weight_factor * 0.2
             metrics_dict[f'crash_{horizon}h'] = ['accuracy']
 
             loss_dict[f'pump_{horizon}h'] = 'binary_crossentropy'
-            loss_weights_dict[f'pump_{horizon}h'] = weight_factor * 0.35
+            loss_weights_dict[f'pump_{horizon}h'] = weight_factor * 0.2
             metrics_dict[f'pump_{horizon}h'] = ['accuracy']
         
         optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
