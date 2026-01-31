@@ -1388,6 +1388,31 @@ def _fetch_recent_news(hours_back: int = 72) -> pd.DataFrame | None:
     except Exception:
         return None
 
+
+@st.cache_data(ttl=600)
+def _fetch_recent_derivatives_bundle(hours_back: int = 168) -> dict:
+    """Best-effort derivatives/funding/liquidations/options bundle.
+
+    Uses AlternativeDataCollector if importable. Cached to limit API calls.
+    """
+    try:
+        from alternative_data import AlternativeDataCollector
+
+        alt = AlternativeDataCollector(api_keys={})
+        return {
+            'derivatives': alt.get_derivatives_data('bitcoin'),
+            'funding_rates': alt.get_funding_rates('bitcoin'),
+            'liquidations': alt.get_liquidation_data('bitcoin'),
+            'options_flow': alt.get_options_flow('bitcoin'),
+        }
+    except Exception:
+        return {
+            'derivatives': None,
+            'funding_rates': None,
+            'liquidations': None,
+            'options_flow': None,
+        }
+
 @st.cache_resource
 def load_model_and_predictor(model_mtime: float, metadata_mtime: float):
     """Load model and predictor (cached for performance).
@@ -1653,7 +1678,15 @@ def compute_historical_backtest(
     except Exception as e:
         debug['predict_error'] = str(e)
         return _empty('predict_failed')
-    price_scaled = raw_pred[horizon_idx * 3]
+
+    if isinstance(raw_pred, dict):
+        price_scaled = raw_pred.get(f'price_{horizon_hours}h')
+    else:
+        price_scaled = raw_pred[horizon_idx * 3]
+
+    if price_scaled is None:
+        debug['predict_error'] = f"missing price head for horizon={horizon_hours}h"
+        return _empty('predict_failed')
     price_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
 
     # Ensure target_at is consistently UTC tz-aware to avoid tz-naive/aware comparison issues.
@@ -1808,7 +1841,63 @@ def _render_price_accuracy_badge(accuracy_text: str) -> str:
         "</div></div>"
     )
 
-def create_prediction_card(horizon, label, current_price, pred_price, pred_std, direction_prob, predictor):
+
+def _render_shock_badge(level: str, headline: str, detail: str = "") -> str:
+    """Render a compact risk badge (LOW / MEDIUM / HIGH)."""
+    level_norm = (level or "").strip().lower()
+    if level_norm not in {"low", "medium", "high"}:
+        level_norm = "low"
+
+    if level_norm == "high":
+        bg = "linear-gradient(135deg, rgba(239, 68, 68, 0.22) 0%, rgba(239, 68, 68, 0.10) 100%)"
+        border = "border: 1px solid rgba(239, 68, 68, 0.35);"
+        dot = "#ef4444"
+        label = "HIGH"
+    elif level_norm == "medium":
+        bg = "linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(245, 158, 11, 0.10) 100%)"
+        border = "border: 1px solid rgba(245, 158, 11, 0.35);"
+        dot = "#f59e0b"
+        label = "MEDIUM"
+    else:
+        bg = "linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(16, 185, 129, 0.08) 100%)"
+        border = "border: 1px solid rgba(16, 185, 129, 0.30);"
+        dot = "#10b981"
+        label = "LOW"
+
+    detail_html = ""
+    if detail:
+        detail_html = f"<div style='margin-top: 0.18rem; font-size: 0.82rem; color: var(--dsba-text-2);'>{detail}</div>"
+
+    return (
+        "<div style='display:flex; justify-content:center; margin: 0.05rem 0 0.85rem 0;'>"
+        f"<div style='max-width: 980px; width: 100%; padding: 0.55rem 0.85rem; border-radius: 14px; {border} "
+        f"background: {bg}; box-shadow: var(--dsba-shadow); color: var(--dsba-text);'>"
+        "<div style='display:flex; align-items:center; justify-content:space-between; gap: 0.75rem;'>"
+        "<div style='display:flex; align-items:center; gap:0.55rem;'>"
+        f"<span style='width:9px; height:9px; border-radius:50%; background:{dot}; display:inline-block; box-shadow:0 0 16px {dot};'></span>"
+        f"<div style='font-weight: 800; letter-spacing: 0.25px;'>Shock Alert: {label}</div>"
+        "</div>"
+        f"<div style='font-weight: 700; color: var(--dsba-text); text-align:right;'>{headline}</div>"
+        "</div>"
+        f"{detail_html}"
+        "</div></div>"
+    )
+
+def create_prediction_card(
+    horizon,
+    label,
+    current_price,
+    pred_price,
+    pred_std,
+    direction_prob,
+    predictor,
+    *,
+    q10=None,
+    q50=None,
+    q90=None,
+    crash_prob=None,
+    pump_prob=None,
+):
     """Create a prediction card for a specific horizon"""
     # Calculate metrics
     change_pct = ((pred_price - current_price) / current_price) * 100
@@ -1836,7 +1925,7 @@ def create_prediction_card(horizon, label, current_price, pred_price, pred_std, 
         signal_class = "hold-signal"
         signal_color = "#ffc107"
     
-    return {
+    card = {
         'horizon': label,
         'predicted_price': pred_price,
         'uncertainty': pred_std,
@@ -1851,6 +1940,19 @@ def create_prediction_card(horizon, label, current_price, pred_price, pred_std, 
         'signal_class': signal_class,
         'signal_color': signal_color
     }
+
+    if q10 is not None:
+        card['q10'] = float(q10)
+    if q50 is not None:
+        card['q50'] = float(q50)
+    if q90 is not None:
+        card['q90'] = float(q90)
+    if crash_prob is not None:
+        card['crash_prob'] = float(crash_prob)
+    if pump_prob is not None:
+        card['pump_prob'] = float(pump_prob)
+
+    return card
 
 
 def _render_html_block(html: str) -> None:
@@ -2271,6 +2373,7 @@ def main():
 
     # Accuracy badge placeholder (updated after predictions/backtest are computed)
     price_accuracy_ph = st.empty()
+    shock_badge_ph = st.empty()
     
     # Generate features and predictions
     loading_ph.markdown(
@@ -2286,6 +2389,7 @@ def main():
     with st.spinner("🧠 Generating AI Predictions..."):
         features_df = None
         news_df = None
+        alt_bundle = None
 
         # Only fetch news if the model expects news/geopolitics features.
         try:
@@ -2294,11 +2398,19 @@ def main():
                 k.startswith('news_') or k.startswith('geo_')
                 for k in fn
             )
+            expects_derivs = any(
+                k.startswith('deriv_') or k.startswith('funding_') or k.startswith('liq_') or k.startswith('options_')
+                for k in fn
+            )
         except Exception:
             expects_news = False
+            expects_derivs = False
 
         if expects_news:
             news_df = _fetch_recent_news(hours_back=72)
+
+        if expects_derivs:
+            alt_bundle = _fetch_recent_derivatives_bundle(hours_back=168)
 
         if bool(st.session_state.get('use_cached_features', False)) and CACHED_SIMPLE_FEATURES_PATH.exists():
             try:
@@ -2313,7 +2425,14 @@ def main():
                 features_df = None
 
         if features_df is None:
-            features_df = add_simple_features(price_data, news_df=news_df)
+            features_df = add_simple_features(
+                price_data,
+                news_df=news_df,
+                derivatives_df=(alt_bundle or {}).get('derivatives') if alt_bundle else None,
+                funding_df=(alt_bundle or {}).get('funding_rates') if alt_bundle else None,
+                liquidations_df=(alt_bundle or {}).get('liquidations') if alt_bundle else None,
+                options_df=(alt_bundle or {}).get('options_flow') if alt_bundle else None,
+            )
         predictions = generate_predictions(predictor, metadata, features_df)
 
     # Load validation records from DB (best-effort) AFTER predictions are ready
@@ -2391,6 +2510,34 @@ def main():
         pred_scaled = predictions[f'price_{horizon}h'][0]
         pred_std_scaled = predictions[f'price_{horizon}h_std'][0]
         direction_prob = predictions[f'direction_{horizon}h'][0]
+
+        # Optional heads: quantiles + tail-risk
+        q10 = q50 = q90 = None
+        crash_prob = pump_prob = None
+        try:
+            q10_key = f'price_p10_{horizon}h'
+            q50_key = f'price_p50_{horizon}h'
+            q90_key = f'price_p90_{horizon}h'
+            if q10_key in predictions and q90_key in predictions:
+                q10_scaled = float(np.asarray(predictions[q10_key][0]).reshape(-1)[0])
+                q90_scaled = float(np.asarray(predictions[q90_key][0]).reshape(-1)[0])
+                q10 = float(predictor.price_scaler.inverse_transform([[q10_scaled]])[0, 0])
+                q90 = float(predictor.price_scaler.inverse_transform([[q90_scaled]])[0, 0])
+            if q50_key in predictions:
+                q50_scaled = float(np.asarray(predictions[q50_key][0]).reshape(-1)[0])
+                q50 = float(predictor.price_scaler.inverse_transform([[q50_scaled]])[0, 0])
+        except Exception:
+            q10 = q50 = q90 = None
+
+        try:
+            crash_key = f'crash_{horizon}h'
+            pump_key = f'pump_{horizon}h'
+            if crash_key in predictions:
+                crash_prob = float(np.asarray(predictions[crash_key][0]).reshape(-1)[0])
+            if pump_key in predictions:
+                pump_prob = float(np.asarray(predictions[pump_key][0]).reshape(-1)[0])
+        except Exception:
+            crash_prob = pump_prob = None
         
         if isinstance(pred_scaled, np.ndarray):
             pred_scaled = float(pred_scaled.flatten()[0])
@@ -2402,8 +2549,20 @@ def main():
         else:
             pred_std_price = float(pred_std_scaled.flatten()[0]) * 1000
         
-        card = create_prediction_card(horizon, label, current_price, pred_price, 
-                                     pred_std_price, direction_prob, predictor)
+        card = create_prediction_card(
+            horizon,
+            label,
+            current_price,
+            pred_price,
+            pred_std_price,
+            direction_prob,
+            predictor,
+            q10=q10,
+            q50=q50,
+            q90=q90,
+            crash_prob=crash_prob,
+            pump_prob=pump_prob,
+        )
         prediction_cards.append(card)
 
     # Store predictions now for future historical charts (best-effort)
@@ -2433,6 +2592,58 @@ def main():
         _render_price_accuracy_badge(accuracy_text),
         unsafe_allow_html=True,
     )
+
+    # Shock alert badge (best-effort): driven by tail heads + optional geopolitics score
+    try:
+        c24 = next((c for c in prediction_cards if c.get('horizon') == '24H'), None)
+        crash_24 = float(c24.get('crash_prob')) if c24 and c24.get('crash_prob') is not None else None
+        pump_24 = float(c24.get('pump_prob')) if c24 and c24.get('pump_prob') is not None else None
+        risk = None
+        if crash_24 is not None and pump_24 is not None:
+            risk = max(crash_24, pump_24)
+        elif crash_24 is not None:
+            risk = crash_24
+        elif pump_24 is not None:
+            risk = pump_24
+
+        geo_score = None
+        try:
+            if features_df is not None and isinstance(features_df, pd.DataFrame):
+                fnum = features_df.select_dtypes(include=[np.number])
+                if 'geo_risk_score_6h' in fnum.columns:
+                    geo_score = float(fnum['geo_risk_score_6h'].iloc[-1])
+        except Exception:
+            geo_score = None
+
+        if risk is None:
+            shock_badge_ph.markdown(
+                _render_shock_badge('low', 'Tail-risk heads not trained yet', 'Retrain the model to enable crash/pump probabilities.'),
+                unsafe_allow_html=True,
+            )
+        else:
+            level = 'low'
+            if risk >= 0.70:
+                level = 'high'
+            elif risk >= 0.50:
+                level = 'medium'
+
+            # If geopolitics score is elevated, nudge severity up one step.
+            if geo_score is not None and geo_score >= 2.0:
+                level = 'high' if level == 'medium' else ('medium' if level == 'low' else 'high')
+
+            headline = f"24H Crash {((crash_24 or 0.0) * 100):.0f}% · Pump {((pump_24 or 0.0) * 100):.0f}%"
+            detail = None
+            if geo_score is not None:
+                detail = f"Geo risk (6H): {geo_score:.2f}"
+            shock_badge_ph.markdown(
+                _render_shock_badge(level, headline, detail or ""),
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        shock_badge_ph.markdown(
+            _render_shock_badge('low', 'Shock alert unavailable', ''),
+            unsafe_allow_html=True,
+        )
 
     # Loading state complete
     loading_ph.empty()
@@ -2608,6 +2819,24 @@ def main():
                 'HOLD': 'signal-hold'
             }
 
+            range_line = ""
+            if card.get('q10') is not None and card.get('q90') is not None:
+                range_line = (
+                    f"<div style='margin-top: 0.35rem; font-size: 0.86rem; color: var(--dsba-text-2);'>"
+                    f"P10–P90: ${card['q10']:,.0f} – ${card['q90']:,.0f}"
+                    f"</div>"
+                )
+
+            risk_line = ""
+            if card.get('crash_prob') is not None or card.get('pump_prob') is not None:
+                crash_p = float(card.get('crash_prob') or 0.0)
+                pump_p = float(card.get('pump_prob') or 0.0)
+                risk_line = (
+                    f"<div style='margin-top: 0.15rem; font-size: 0.84rem; color: var(--dsba-text-2);'>"
+                    f"Tail risk: Crash {crash_p*100:.0f}% · Pump {pump_p*100:.0f}%"
+                    f"</div>"
+                )
+
             kpi_html = textwrap.dedent(f"""\
             <div class="kpi-card">
                 <div class="kpi-header">
@@ -2616,6 +2845,9 @@ def main():
                 </div>
                 <div class="kpi-price">${card['predicted_price']:,.0f}</div>
                 <div class="kpi-change {change_class}">{change_arrow} {abs(card['change_pct']):.2f}%</div>
+
+                {range_line}
+                {risk_line}
 
                 <div class="confidence-gauge">
                     <div class="confidence-label">Confidence</div>
@@ -2645,6 +2877,24 @@ def main():
                 'HOLD': 'signal-hold'
             }
 
+            range_line = ""
+            if card.get('q10') is not None and card.get('q90') is not None:
+                range_line = (
+                    f"<div style='margin-top: 0.35rem; font-size: 0.86rem; color: var(--dsba-text-2);'>"
+                    f"P10–P90: ${card['q10']:,.0f} – ${card['q90']:,.0f}"
+                    f"</div>"
+                )
+
+            risk_line = ""
+            if card.get('crash_prob') is not None or card.get('pump_prob') is not None:
+                crash_p = float(card.get('crash_prob') or 0.0)
+                pump_p = float(card.get('pump_prob') or 0.0)
+                risk_line = (
+                    f"<div style='margin-top: 0.15rem; font-size: 0.84rem; color: var(--dsba-text-2);'>"
+                    f"Tail risk: Crash {crash_p*100:.0f}% · Pump {pump_p*100:.0f}%"
+                    f"</div>"
+                )
+
             kpi_html = textwrap.dedent(f"""\
             <div class="kpi-card">
                 <div class="kpi-header">
@@ -2653,6 +2903,9 @@ def main():
                 </div>
                 <div class="kpi-price">${card['predicted_price']:,.0f}</div>
                 <div class="kpi-change {change_class}">{change_arrow} {abs(card['change_pct']):.2f}%</div>
+
+                {range_line}
+                {risk_line}
 
                 <div class="confidence-gauge">
                     <div class="confidence-label">Confidence</div>
