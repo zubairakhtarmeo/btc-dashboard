@@ -30,66 +30,7 @@ METADATA_PATH = MODELS_DIR / 'bitcoin_real_simplified_metadata.pkl'
 from enhanced_predictor import EnhancedCryptoPricePredictor
 from data_collector import CryptoDataCollector
 
-def add_simple_features(df):
-    """Add basic features matching train_simple.py exactly"""
-    df = df.copy()
-    
-    # Basic returns
-    for h in [1, 6, 12, 24, 48, 168]:
-        df[f'return_{h}h'] = df['close'].pct_change(h)
-        df[f'log_return_{h}h'] = np.log1p(df[f'return_{h}h'])
-    
-    # Simple moving averages
-    for period in [7, 14, 21, 50, 100, 200]:
-        df[f'sma_{period}'] = df['close'].rolling(period).mean()
-        df[f'distance_sma_{period}'] = (df['close'] - df[f'sma_{period}']) / df[f'sma_{period}']
-    
-    # Volatility
-    for period in [7, 14, 21, 50]:
-        df[f'volatility_{period}'] = df['return_1h'].rolling(period).std()
-    
-    # Volume indicators
-    df['volume_sma_20'] = df['volume'].rolling(20).mean()
-    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
-    
-    # RSI
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df['rsi_14'] = 100 - (100 / (1 + rs))
-    
-    # MACD
-    ema_12 = df['close'].ewm(span=12).mean()
-    ema_26 = df['close'].ewm(span=26).mean()
-    df['macd'] = ema_12 - ema_26
-    df['macd_signal'] = df['macd'].ewm(span=9).mean()
-    df['macd_histogram'] = df['macd'] - df['macd_signal']
-    
-    # Bollinger Bands
-    df['bb_middle'] = df['close'].rolling(20).mean()
-    bb_std = df['close'].rolling(20).std()
-    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
-    df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
-    # ATR
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    df['atr_14'] = true_range.rolling(14).mean()
-    df['atr_ratio'] = df['atr_14'] / df['close']
-    
-    # Momentum
-    df['momentum_consistency'] = (
-        np.sign(df['return_1h']) == np.sign(df['return_6h'])
-    ).astype(int)
-    
-    df_clean = df.dropna()
-    return df_clean
+from simple_features import add_simple_features
 
 def predict_live():
     """
@@ -142,8 +83,15 @@ def predict_live():
     with open(METADATA_PATH, 'rb') as f:
         metadata = pickle.load(f)
     
+    # Pull recent news to build explicit geopolitics/news features (best-effort)
+    news_df = None
+    try:
+        news_df = collector.news_collector.get_news('bitcoin', hours_back=72)
+    except Exception:
+        news_df = None
+
     # Generate features using the SAME method as training
-    features_df = add_simple_features(price_data)
+    features_df = add_simple_features(price_data, news_df=news_df)
     
     # Remove non-numeric columns and select only model features
     features_df_clean = features_df.select_dtypes(include=[np.number])
@@ -155,7 +103,7 @@ def predict_live():
     # Load trained model
     logger.info(" Loading trained model...")
     
-    import keras
+    from tensorflow import keras
     
     # Import custom layers
     from enhanced_predictor import TemporalConvLayer, MultiHeadAttentionCustom
