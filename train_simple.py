@@ -257,8 +257,8 @@ def main():
     logger.info("🔮 Step 7: Generating predictions...")
     predictions = predictor.predict_with_uncertainty(X[-10:])
     
-    # Get current price
-    current_price = predictor.scaler_y.inverse_transform([[float(y_dict['price_1h'][-1, 0])]])[0][0]
+    # Get current price from the actual price data (not from scaled targets)
+    current_price = float(price_df['close'].iloc[-1])
     
     print()
     print("="*70)
