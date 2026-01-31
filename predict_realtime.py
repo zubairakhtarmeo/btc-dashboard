@@ -90,8 +90,35 @@ def predict_live():
     except Exception:
         news_df = None
 
+    # Pull derivatives/liquidations/options (best-effort)
+    alt_bundle = {
+        'derivatives': None,
+        'funding_rates': None,
+        'liquidations': None,
+        'options_flow': None,
+    }
+    try:
+        from alternative_data import AlternativeDataCollector
+
+        alt = AlternativeDataCollector(api_keys={})
+        alt_bundle = {
+            'derivatives': alt.get_derivatives_data('bitcoin'),
+            'funding_rates': alt.get_funding_rates('bitcoin'),
+            'liquidations': alt.get_liquidation_data('bitcoin'),
+            'options_flow': alt.get_options_flow('bitcoin'),
+        }
+    except Exception:
+        alt_bundle = alt_bundle
+
     # Generate features using the SAME method as training
-    features_df = add_simple_features(price_data, news_df=news_df)
+    features_df = add_simple_features(
+        price_data,
+        news_df=news_df,
+        derivatives_df=alt_bundle.get('derivatives'),
+        funding_df=alt_bundle.get('funding_rates'),
+        liquidations_df=alt_bundle.get('liquidations'),
+        options_df=alt_bundle.get('options_flow'),
+    )
     
     # Remove non-numeric columns and select only model features
     features_df_clean = features_df.select_dtypes(include=[np.number])
