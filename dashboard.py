@@ -2746,13 +2746,12 @@ def main():
             hovertemplate='<b>%{x|%b %d, %Y}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
         ))
 
-        # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
-        y_min = min(daily_agg['actual'].min(), daily_agg['predicted'].min())
-        y_max = max(daily_agg['actual'].max(), daily_agg['predicted'].max())
-        y_center = (y_min + y_max) / 2
-        y_range_target = 10000
-        y_axis_min = max(0, y_center - y_range_target / 2)
-        y_axis_max = y_center + y_range_target / 2
+        # Calculate y-axis range (responsive): show ±$5k beyond min/max so low/high points don't get clipped.
+        y_min = float(min(daily_agg['actual'].min(), daily_agg['predicted'].min()))
+        y_max = float(max(daily_agg['actual'].max(), daily_agg['predicted'].max()))
+        pad = 5000.0
+        y_axis_min = max(0.0, y_min - pad)
+        y_axis_max = y_max + pad
 
         title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
         fig_roll.update_layout(
@@ -3152,8 +3151,12 @@ def main():
             hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.2f}<extra></extra>'
         ))
 
-        y_min = float(recent['close'].min()) * 0.985
-        y_max = float(recent['close'].max()) * 1.015
+        # Responsive y-axis range: ±$5k beyond min/max
+        y_min = float(recent['close'].min())
+        y_max = float(recent['close'].max())
+        pad = 5000.0
+        y_axis_min = max(0.0, y_min - pad)
+        y_axis_max = y_max + pad
 
         fig_historical.update_layout(
             title=dict(
@@ -3191,7 +3194,8 @@ def main():
                 linecolor=plot_border,
                 tickfont=dict(color=plot_text_color),
                 title_font=dict(color=plot_text_color),
-                tickformat='$,.0f'
+                tickformat='$,.0f',
+                range=[y_axis_min, y_axis_max]
             )
         )
 
