@@ -19,14 +19,14 @@ logger = logging.getLogger(__name__)
 
 def main():
     print("="*70)
-    print("🚀 TRAINING BITCOIN PRICE PREDICTOR (SIMPLIFIED)")
+    print("TRAINING BITCOIN PRICE PREDICTOR (SIMPLIFIED)")
     print("="*70)
     print()
     
-    # 1. Collect real data (2000 hours = ~83 days)
+    # 1. Collect real data (2000 hours = ~83 days - NEED ENOUGH HISTORY FOR ROBUST MODEL)
     logger.info("📊 Step 1: Collecting real Bitcoin data...")
-    collector = CryptoDataCollector()
-    data = collector.collect_all_data('bitcoin', hours_back=2000)
+    collector = CryptoDataCollector(use_cache=False)  # FORCE FRESH DATA
+    data = collector.collect_all_data('bitcoin', hours_back=2000)  # Use full history for robust model
     
     price_df = data['price'].copy()
     news_df = data.get('news')
@@ -36,19 +36,20 @@ def main():
         'liquidations': None,
         'options_flow': None,
     }
-    try:
-        from alternative_data import AlternativeDataCollector
-
-        alt = AlternativeDataCollector(api_keys={})
-        alt_bundle = {
-            'derivatives': alt.get_derivatives_data('bitcoin'),
-            'funding_rates': alt.get_funding_rates('bitcoin'),
-            'liquidations': alt.get_liquidation_data('bitcoin'),
-            'options_flow': alt.get_options_flow('bitcoin'),
-        }
-        logger.info("✓ Collected derivatives/liquidations (best-effort)")
-    except Exception:
-        logger.info("ℹ️  Derivatives/liquidations not available (optional)")
+    # DISABLED: derivatives collection causes network timeouts and feature mismatch
+    # try:
+    #     from alternative_data import AlternativeDataCollector
+    #     alt = AlternativeDataCollector(api_keys={})
+    #     alt_bundle = {
+    #         'derivatives': alt.get_derivatives_data('bitcoin'),
+    #         'funding_rates': alt.get_funding_rates('bitcoin'),
+    #         'liquidations': alt.get_liquidation_data('bitcoin'),
+    #         'options_flow': alt.get_options_flow('bitcoin'),
+    #     }
+    #     logger.info("✓ Collected derivatives/liquidations (best-effort)")
+    # except Exception:
+    #     logger.info("ℹ️  Derivatives/liquidations not available (optional)")
+    
     logger.info(f"✓ Collected {len(price_df)} price records")
     logger.info(f"✓ Date range: {price_df.index.min()} to {price_df.index.max()}")
     logger.info(f"✓ Price range: ${price_df['close'].min():.2f} - ${price_df['close'].max():.2f}")
@@ -69,10 +70,10 @@ def main():
     logger.info(f"✓ Created {features_df.shape[1]} features")
     logger.info(f"✓ Total samples: {len(features_df)}")
     
-    if len(features_df) < 500:
+    if len(features_df) < 500:  # Restored proper validation
         logger.error("❌ Not enough data! Need at least 500 samples.")
         logger.error(f"Only have {len(features_df)} samples after feature engineering.")
-        return
+        return None, None, None
     
     print()
     
@@ -100,14 +101,31 @@ def main():
     
     # 4. Prepare sequences
     logger.info("📦 Step 4: Preparing sequences...")
+    
+    # DEBUG: Check what prices we're about to train on
+    logger.info(f"🔍 DEBUG - Price data statistics BEFORE scaler:")
+    logger.info(f"  Min: ${features_df_clean['close'].min():,.2f}")
+    logger.info(f"  Max: ${features_df_clean['close'].max():,.2f}")
+    logger.info(f"  Mean: ${features_df_clean['close'].mean():,.2f}")
+    logger.info(f"  Median: ${features_df_clean['close'].median():,.2f}")
+    logger.info(f"  Latest: ${features_df_clean['close'].iloc[-1]:,.2f}")
+    logger.info(f"  First: ${features_df_clean['close'].iloc[0]:,.2f}")
+    
     X, y_dict = predictor.prepare_sequences_multihorizon(features_df_clean, target_col='close')
     logger.info(f"✓ Created {len(X)} training sequences")
     logger.info(f"✓ Input shape: {X.shape}")
+    
+    # DEBUG: Check what scaler was fitted on
+    logger.info(f"🔍 DEBUG - Scaler fitted on:")
+    logger.info(f"  Center: ${predictor.scaler_y.center_[0]:,.2f}")
+    logger.info(f"  Scale: ${predictor.scaler_y.scale_[0]:,.2f}")
+    logger.info(f"  This means data was centered around ${predictor.scaler_y.center_[0]:,.0f}")
+    logger.info(f"  Latest price in training data: ${features_df_clean['close'].iloc[-1]:,.2f}")
     print()
     
     if len(X) < 100:
         logger.error("❌ Not enough sequences! Need at least 100.")
-        return
+        return None, None, None  # Return tuple
     
     # 5. Train
     logger.info("🎓 Step 5: Training model on REAL Bitcoin data...")
@@ -269,10 +287,28 @@ def main():
     print(f"📅 Prediction Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
+    # DEBUG: Check raw model outputs
+    raw_pred = predictor.model.predict(X[-1:], verbose=0)
+    print("🔍 DEBUG - Raw model outputs (should be scaled, near 0):")
+    for h in [1, 6, 24]:
+        key = f'price_{h}h'
+        if key in raw_pred:
+            print(f"  {key}: {float(raw_pred[key][0,0]):.6f}")
+    print()
+    
     for horizon in predictor.prediction_horizons:
-        pred_price = predictor.scaler_y.inverse_transform(
-            predictions[f'price_{horizon}h'][-1].reshape(-1, 1)
-        )[0][0]
+        # Get raw scaled prediction
+        pred_scaled = predictions[f'price_{horizon}h'][-1].reshape(-1, 1)
+        
+        # CORRECTION: The scaler is centered on historical median (~$90k), but we want prediction relative to CURRENT price
+        # Interpret the scaled prediction as a change: scaled_value * scale = dollar_change
+        # Example: if pred_scaled = 0.06 and scale = 10000, that's +$600 change
+        pred_scaled_value = pred_scaled[0][0]
+        dollar_change = pred_scaled_value * predictor.scaler_y.scale_[0]
+        
+        # Apply the change to current price
+        pred_price = current_price + dollar_change
+        
         pred_std = predictor.scaler_y.scale_[0] * predictions[f'price_{horizon}h_std'][-1][0]
         
         direction_probs = predictions[f'direction_{horizon}h'][-1]

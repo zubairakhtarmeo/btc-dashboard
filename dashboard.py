@@ -2551,7 +2551,13 @@ def main():
         if isinstance(pred_scaled, np.ndarray):
             pred_scaled = float(pred_scaled.flatten()[0])
         
-        pred_price = predictor.price_scaler.inverse_transform([[pred_scaled]])[0, 0]
+        # Use relative prediction approach to avoid scaler offset issues
+        # Interpret the scaled prediction as a change: scaled_value * scale = dollar_change
+        # Example: if pred_scaled = 0.06 and scale = 10000, that's +$600 change
+        dollar_change = pred_scaled * predictor.price_scaler.scale_[0]
+        
+        # Apply the change to current price
+        pred_price = current_price + dollar_change
         
         if hasattr(predictor.price_scaler, 'scale_'):
             pred_std_price = float(pred_std_scaled.flatten()[0]) * predictor.price_scaler.scale_[0]
