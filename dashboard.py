@@ -2508,10 +2508,10 @@ def main():
         all_time_n = 0
         rolling_err = str(e)
     
-    # Prediction horizons
-    horizons = [1, 6, 12, 24, 48, 72, 168]
-    horizon_labels = ['1H', '6H', '12H', '24H', '48H', '72H', '7D']
-    horizon_icons = ['🕐', '🕕', '🕚', '📅', '📆', '📆', '📅']
+    # Prediction horizons (UI): hide 1H and 6H cards
+    horizons = [12, 24, 48, 72, 168]
+    horizon_labels = ['12H', '24H', '48H', '72H', '7D']
+    horizon_icons = ['🕚', '📅', '📆', '📆', '📅']
     
     # Process all predictions
     prediction_cards = []
