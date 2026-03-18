@@ -32,8 +32,6 @@ import streamlit.components.v1 as components
 # Delay heavy ML imports until needed to avoid native library crashes on startup
 from data_collector import CryptoDataCollector
 
-from simple_features import add_simple_features
-
 
 print("[DASHBOARD] Starting imports...", flush=True)
 
@@ -1378,40 +1376,65 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=300)
-def _fetch_recent_news(hours_back: int = 72) -> pd.DataFrame | None:
-    """Fetch recent news (best-effort). Cached to avoid hammering APIs."""
-    try:
-        collector = CryptoDataCollector(use_cache=False)
-        news_df = collector.news_collector.get_news('bitcoin', hours_back=int(hours_back))
-        return news_df
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=600)
-def _fetch_recent_derivatives_bundle(hours_back: int = 168) -> dict:
-    """Best-effort derivatives/funding/liquidations/options bundle.
-
-    Uses AlternativeDataCollector if importable. Cached to limit API calls.
-    """
-    try:
-        from alternative_data import AlternativeDataCollector
-
-        alt = AlternativeDataCollector(api_keys={})
-        return {
-            'derivatives': alt.get_derivatives_data('bitcoin'),
-            'funding_rates': alt.get_funding_rates('bitcoin'),
-            'liquidations': alt.get_liquidation_data('bitcoin'),
-            'options_flow': alt.get_options_flow('bitcoin'),
-        }
-    except Exception:
-        return {
-            'derivatives': None,
-            'funding_rates': None,
-            'liquidations': None,
-            'options_flow': None,
-        }
+def add_simple_features(df):
+    """Add basic features matching train_simple.py exactly"""
+    df = df.copy()
+    
+    # Basic returns
+    for h in [1, 6, 12, 24, 48, 168]:
+        df[f'return_{h}h'] = df['close'].pct_change(h)
+        df[f'log_return_{h}h'] = np.log1p(df[f'return_{h}h'])
+    
+    # Simple moving averages
+    for period in [7, 14, 21, 50, 100, 200]:
+        df[f'sma_{period}'] = df['close'].rolling(period).mean()
+        df[f'distance_sma_{period}'] = (df['close'] - df[f'sma_{period}']) / df[f'sma_{period}']
+    
+    # Volatility
+    for period in [7, 14, 21, 50]:
+        df[f'volatility_{period}'] = df['return_1h'].rolling(period).std()
+    
+    # Volume indicators
+    df['volume_sma_20'] = df['volume'].rolling(20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['rsi_14'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    ema_12 = df['close'].ewm(span=12).mean()
+    ema_26 = df['close'].ewm(span=26).mean()
+    df['macd'] = ema_12 - ema_26
+    df['macd_signal'] = df['macd'].ewm(span=9).mean()
+    df['macd_histogram'] = df['macd'] - df['macd_signal']
+    
+    # Bollinger Bands
+    df['bb_middle'] = df['close'].rolling(20).mean()
+    bb_std = df['close'].rolling(20).std()
+    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
+    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+    df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
+    
+    # ATR
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    df['atr_14'] = true_range.rolling(14).mean()
+    df['atr_ratio'] = df['atr_14'] / df['close']
+    
+    # Momentum
+    df['momentum_consistency'] = (
+        np.sign(df['return_1h']) == np.sign(df['return_6h'])
+    ).astype(int)
+    
+    return df.dropna()
 
 @st.cache_resource
 def load_model_and_predictor(model_mtime: float, metadata_mtime: float):
@@ -1489,7 +1512,40 @@ def fetch_live_data(use_cached_history: bool, cached_history_mtime: float):
         price_data = None
         if bool(use_cached_history) and CACHED_PRICE_PATH.exists():
             try:
-                price_data = pd.read_pickle(str(CACHED_PRICE_PATH))
+                candidate = pd.read_pickle(str(CACHED_PRICE_PATH))
+                if isinstance(candidate, pd.DataFrame) and len(candidate) > 0:
+                    candidate = _ensure_datetime_index(candidate).sort_index()
+
+                    # Validate cached history: must be recent + long enough for rolling features.
+                    min_rows = 300  # ~200 (max rolling window) + 60 (seq_len) + buffer
+                    close = (
+                        pd.to_numeric(candidate['close'], errors='coerce').dropna()
+                        if 'close' in candidate.columns
+                        else pd.Series(dtype=float)
+                    )
+                    flat = (close.nunique(dropna=True) <= 3) or (float(close.std(skipna=True)) < 1e-6) if not close.empty else True
+                    too_short = len(candidate) < min_rows
+
+                    stale = True
+                    if isinstance(candidate.index, pd.DatetimeIndex) and len(candidate.index) > 0:
+                        last_ts = candidate.index.max()
+                        if last_ts is not pd.NaT:
+                            age_h = (pd.Timestamp.utcnow() - pd.to_datetime(last_ts, utc=True)).total_seconds() / 3600.0
+                            stale = age_h > 12.0
+
+                    mismatch = False
+                    if current_price is not None and not close.empty:
+                        last_close = float(close.iloc[-1])
+                        if last_close > 0:
+                            mismatch = abs(float(current_price) - last_close) / last_close > 0.05
+
+                    if not (flat or too_short or stale or mismatch):
+                        try:
+                            candidate.attrs = dict(getattr(candidate, 'attrs', {}) or {})
+                            candidate.attrs.update({'source': 'Dashboard cache', 'cache_hit': True})
+                        except Exception:
+                            pass
+                        price_data = candidate
             except Exception:
                 price_data = None
 
@@ -1503,11 +1559,12 @@ def fetch_live_data(use_cached_history: bool, cached_history_mtime: float):
             except Exception:
                 current_price = None
 
-        # Always blend the live price into the last candle.
-        # During shocks (often >1% move), refusing to blend makes the model blind to the move.
+        # Only blend live price into the last candle if it's close to the historical last close.
+        # This prevents a confusing vertical "cliff" when the historical series is stale/flat.
         try:
-            if current_price is not None and 'close' in price_data.columns and len(price_data) > 0:
-                price_data.iloc[-1, price_data.columns.get_loc('close')] = float(current_price)
+            last_close = float(price_data['close'].iloc[-1])
+            if current_price is not None and last_close > 0 and abs(float(current_price) - last_close) / last_close <= 0.01:
+                price_data.iloc[-1, price_data.columns.get_loc('close')] = current_price
         except Exception:
             pass
         
@@ -1520,9 +1577,8 @@ def generate_predictions(predictor, metadata, features_df):
     feature_names = metadata['feature_names']
     features_df_clean = features_df.select_dtypes(include=[np.number])
     features = features_df_clean[feature_names]
-    
-    feature_cols = [col for col in features.columns if col != 'close']
-    features_array = features[feature_cols].values
+
+    features_array = features.values
     features_scaled = predictor.feature_scaler.transform(features_array)
     
     sequence_length = metadata['config']['sequence_length']
@@ -1627,21 +1683,11 @@ def compute_historical_backtest(
 
     feature_names = _metadata['feature_names']
     features_df_clean = features_df.select_dtypes(include=[np.number])
-    
-    # Only use features that exist in both the generated data and model metadata
-    available_features = set(features_df_clean.columns)
-    required_features = [f for f in feature_names if f in available_features]
-    
-    # If major features are missing, warn but continue with available subset
-    if len(required_features) < len(feature_names) * 0.8:
-        debug['feature_mismatch'] = f"Model expects {len(feature_names)} features, only {len(required_features)} available"
-    
-    features = features_df_clean[required_features]
+    features = features_df_clean[feature_names]
 
     predictor = _predictor
 
-    feature_cols = [c for c in features.columns if c != 'close']
-    features_array = features[feature_cols].values
+    features_array = features.values
     features_scaled = predictor.feature_scaler.transform(features_array)
 
     seq_len = int(_metadata['config']['sequence_length'])
@@ -1666,15 +1712,23 @@ def compute_historical_backtest(
 
     horizon_idx = list(predictor.prediction_horizons).index(horizon_hours)
 
+    target_type = _metadata.get('target_type') or _metadata.get('config', {}).get('target_type') or 'price'
+
     # Build sequences and target timestamps
     X_list = []
     target_ts = []
+    current_prices = []
+    close_aligned = features_df_clean['close'].reindex(idx).astype(float).values
     for end in range(seq_len, len(scaled) + 1):
         current_ts = idx[end - 1]
         tts = current_ts + pd.Timedelta(hours=horizon_hours)
         # Only keep if we can evaluate against an actual close later
         X_list.append(scaled[end - seq_len:end])
         target_ts.append(tts)
+        try:
+            current_prices.append(float(close_aligned[end - 1]))
+        except Exception:
+            current_prices.append(float('nan'))
 
     if len(X_list) == 0:
         return _empty('no_sequences')
@@ -1687,16 +1741,14 @@ def compute_historical_backtest(
     except Exception as e:
         debug['predict_error'] = str(e)
         return _empty('predict_failed')
+    price_scaled = raw_pred[horizon_idx * 3]
 
-    if isinstance(raw_pred, dict):
-        price_scaled = raw_pred.get(f'price_{horizon_hours}h')
+    if target_type == 'return':
+        return_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
+        current_prices_arr = np.asarray(current_prices, dtype=float)
+        price_pred = current_prices_arr * (1.0 + return_pred)
     else:
-        price_scaled = raw_pred[horizon_idx * 3]
-
-    if price_scaled is None:
-        debug['predict_error'] = f"missing price head for horizon={horizon_hours}h"
-        return _empty('predict_failed')
-    price_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
+        price_pred = predictor.price_scaler.inverse_transform(price_scaled).reshape(-1)
 
     # Ensure target_at is consistently UTC tz-aware to avoid tz-naive/aware comparison issues.
     pred_df = pd.DataFrame({'target_at': pd.to_datetime(target_ts, utc=True), 'predicted': price_pred})
@@ -1850,63 +1902,7 @@ def _render_price_accuracy_badge(accuracy_text: str) -> str:
         "</div></div>"
     )
 
-
-def _render_shock_badge(level: str, headline: str, detail: str = "") -> str:
-    """Render a compact risk badge (LOW / MEDIUM / HIGH)."""
-    level_norm = (level or "").strip().lower()
-    if level_norm not in {"low", "medium", "high"}:
-        level_norm = "low"
-
-    if level_norm == "high":
-        bg = "linear-gradient(135deg, rgba(239, 68, 68, 0.22) 0%, rgba(239, 68, 68, 0.10) 100%)"
-        border = "border: 1px solid rgba(239, 68, 68, 0.35);"
-        dot = "#ef4444"
-        label = "HIGH"
-    elif level_norm == "medium":
-        bg = "linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(245, 158, 11, 0.10) 100%)"
-        border = "border: 1px solid rgba(245, 158, 11, 0.35);"
-        dot = "#f59e0b"
-        label = "MEDIUM"
-    else:
-        bg = "linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(16, 185, 129, 0.08) 100%)"
-        border = "border: 1px solid rgba(16, 185, 129, 0.30);"
-        dot = "#10b981"
-        label = "LOW"
-
-    detail_html = ""
-    if detail:
-        detail_html = f"<div style='margin-top: 0.18rem; font-size: 0.82rem; color: var(--dsba-text-2);'>{detail}</div>"
-
-    return (
-        "<div style='display:flex; justify-content:center; margin: 0.05rem 0 0.85rem 0;'>"
-        f"<div style='max-width: 980px; width: 100%; padding: 0.55rem 0.85rem; border-radius: 14px; {border} "
-        f"background: {bg}; box-shadow: var(--dsba-shadow); color: var(--dsba-text);'>"
-        "<div style='display:flex; align-items:center; justify-content:space-between; gap: 0.75rem;'>"
-        "<div style='display:flex; align-items:center; gap:0.55rem;'>"
-        f"<span style='width:9px; height:9px; border-radius:50%; background:{dot}; display:inline-block; box-shadow:0 0 16px {dot};'></span>"
-        f"<div style='font-weight: 800; letter-spacing: 0.25px;'>Shock Alert: {label}</div>"
-        "</div>"
-        f"<div style='font-weight: 700; color: var(--dsba-text); text-align:right;'>{headline}</div>"
-        "</div>"
-        f"{detail_html}"
-        "</div></div>"
-    )
-
-def create_prediction_card(
-    horizon,
-    label,
-    current_price,
-    pred_price,
-    pred_std,
-    direction_prob,
-    predictor,
-    *,
-    q10=None,
-    q50=None,
-    q90=None,
-    crash_prob=None,
-    pump_prob=None,
-):
+def create_prediction_card(horizon, label, current_price, pred_price, pred_std, direction_prob, predictor):
     """Create a prediction card for a specific horizon"""
     # Calculate metrics
     change_pct = ((pred_price - current_price) / current_price) * 100
@@ -1934,7 +1930,7 @@ def create_prediction_card(
         signal_class = "hold-signal"
         signal_color = "#ffc107"
     
-    card = {
+    return {
         'horizon': label,
         'predicted_price': pred_price,
         'uncertainty': pred_std,
@@ -1949,19 +1945,6 @@ def create_prediction_card(
         'signal_class': signal_class,
         'signal_color': signal_color
     }
-
-    if q10 is not None:
-        card['q10'] = float(q10)
-    if q50 is not None:
-        card['q50'] = float(q50)
-    if q90 is not None:
-        card['q90'] = float(q90)
-    if crash_prob is not None:
-        card['crash_prob'] = float(crash_prob)
-    if pump_prob is not None:
-        card['pump_prob'] = float(pump_prob)
-
-    return card
 
 
 def _render_html_block(html: str) -> None:
@@ -2370,6 +2353,18 @@ def main():
         st.error("Failed to load model. Please check the model files.")
         st.stop()
 
+    # Warn when the model is likely stale (stale models often regress to an old median price).
+    try:
+        if model_mtime:
+            model_age_days = (datetime.now(timezone.utc) - datetime.fromtimestamp(model_mtime, timezone.utc)).days
+            if int(model_age_days) >= 30:
+                st.warning(
+                    f"Model files are {int(model_age_days)} days old. "
+                    "If predictions look unrealistic, run `train_simple.py` to retrain on fresh data."
+                )
+    except Exception:
+        pass
+
     # DB-based 7-day rolling validation using actual predictions with actuals
     # (Run AFTER the hero panel is visible to avoid an “empty screen” on refresh)
     rolling_3d_df = pd.DataFrame()
@@ -2382,7 +2377,6 @@ def main():
 
     # Accuracy badge placeholder (updated after predictions/backtest are computed)
     price_accuracy_ph = st.empty()
-    shock_badge_ph = st.empty()
     
     # Generate features and predictions
     loading_ph.markdown(
@@ -2397,51 +2391,42 @@ def main():
     )
     with st.spinner("🧠 Generating AI Predictions..."):
         features_df = None
-        news_df = None
-        alt_bundle = None
-
-        # Only fetch news if the model expects news/geopolitics features.
-        try:
-            fn = set(metadata.get('feature_names') or [])
-            expects_news = any(
-                k.startswith('news_') or k.startswith('geo_')
-                for k in fn
-            )
-            expects_derivs = any(
-                k.startswith('deriv_') or k.startswith('funding_') or k.startswith('liq_') or k.startswith('options_')
-                for k in fn
-            )
-        except Exception:
-            expects_news = False
-            expects_derivs = False
-
-        if expects_news:
-            news_df = _fetch_recent_news(hours_back=72)
-
-        if expects_derivs:
-            alt_bundle = _fetch_recent_derivatives_bundle(hours_back=168)
-
         if bool(st.session_state.get('use_cached_features', False)) and CACHED_SIMPLE_FEATURES_PATH.exists():
             try:
                 cached_features = pd.read_pickle(str(CACHED_SIMPLE_FEATURES_PATH))
                 cached_features = cached_features.dropna() if isinstance(cached_features, pd.DataFrame) else None
                 req = set(metadata.get('feature_names') or [])
                 if cached_features is not None and req and req.issubset(set(cached_features.columns)):
-                    features_df = cached_features
-                else:
-                    features_df = None
+                    # Validate cached features: must be recent + aligned with current market.
+                    cached_features = _ensure_datetime_index(cached_features).sort_index()
+                    seq_len = int((metadata.get('config') or {}).get('sequence_length') or 60)
+                    min_rows = max(int(seq_len) + 5, 260)
+
+                    stale = True
+                    if isinstance(cached_features.index, pd.DatetimeIndex) and len(cached_features.index) > 0:
+                        last_ts = cached_features.index.max()
+                        if last_ts is not pd.NaT:
+                            age_h = (pd.Timestamp.utcnow() - pd.to_datetime(last_ts, utc=True)).total_seconds() / 3600.0
+                            stale = age_h > 12.0
+
+                    mismatch = False
+                    try:
+                        if current_price is not None and 'close' in cached_features.columns:
+                            last_close = float(pd.to_numeric(cached_features['close'], errors='coerce').dropna().iloc[-1])
+                            if last_close > 0:
+                                mismatch = abs(float(current_price) - last_close) / last_close > 0.05
+                    except Exception:
+                        mismatch = True
+
+                    if (len(cached_features) >= min_rows) and (not stale) and (not mismatch):
+                        features_df = cached_features
+                    else:
+                        features_df = None
             except Exception:
                 features_df = None
 
         if features_df is None:
-            features_df = add_simple_features(
-                price_data,
-                news_df=news_df,
-                derivatives_df=(alt_bundle or {}).get('derivatives') if alt_bundle else None,
-                funding_df=(alt_bundle or {}).get('funding_rates') if alt_bundle else None,
-                liquidations_df=(alt_bundle or {}).get('liquidations') if alt_bundle else None,
-                options_df=(alt_bundle or {}).get('options_flow') if alt_bundle else None,
-            )
+            features_df = add_simple_features(price_data)
         predictions = generate_predictions(predictor, metadata, features_df)
 
     # Load validation records from DB (best-effort) AFTER predictions are ready
@@ -2508,97 +2493,61 @@ def main():
         all_time_n = 0
         rolling_err = str(e)
     
-    # Prediction horizons (UI): hide 1H and 6H cards
-    horizons = [12, 24, 48, 72, 168]
-    horizon_labels = ['12H', '24H', '48H', '72H', '7D']
-    horizon_icons = ['🕚', '📅', '📆', '📆', '📅']
+    # Prediction horizons
+    horizons = [1, 6, 12, 24, 48, 72, 168]
+    horizon_labels = ['1H', '6H', '12H', '24H', '48H', '72H', '7D']
+    horizon_icons = ['🕐', '🕕', '🕚', '📅', '📆', '📆', '📅']
     
     # Process all predictions
+    target_type = metadata.get('target_type') or metadata.get('config', {}).get('target_type') or 'price'
+
+    # Realized baseline uncertainty: 1h return std over the last 7 days.
+    # This prevents extreme uncertainty bands when the volatility head is uncalibrated.
+    realized_std_1h = float('nan')
+    try:
+        features_df_numeric = features_df.select_dtypes(include=[np.number]) if isinstance(features_df, pd.DataFrame) else None
+        if features_df_numeric is not None and 'return_1h' in features_df_numeric.columns:
+            realized_std_1h = float(features_df_numeric['return_1h'].tail(168).std())
+        elif isinstance(price_data, pd.DataFrame) and 'close' in price_data.columns:
+            realized_std_1h = float(pd.to_numeric(price_data['close'], errors='coerce').pct_change().tail(168).std())
+    except Exception:
+        realized_std_1h = float('nan')
+
     prediction_cards = []
     for horizon, label in zip(horizons, horizon_labels):
         pred_scaled = predictions[f'price_{horizon}h'][0]
         pred_std_scaled = predictions[f'price_{horizon}h_std'][0]
         direction_prob = predictions[f'direction_{horizon}h'][0]
-
-        # Optional heads: quantiles + tail-risk
-        q10 = q50 = q90 = None
-        crash_prob = pump_prob = None
-        try:
-            q10_key = f'price_p10_{horizon}h'
-            q50_key = f'price_p50_{horizon}h'
-            q90_key = f'price_p90_{horizon}h'
-            if q10_key in predictions and q90_key in predictions:
-                q10_scaled = float(np.asarray(predictions[q10_key][0]).reshape(-1)[0])
-                q90_scaled = float(np.asarray(predictions[q90_key][0]).reshape(-1)[0])
-                q10 = float(predictor.price_scaler.inverse_transform([[q10_scaled]])[0, 0])
-                q90 = float(predictor.price_scaler.inverse_transform([[q90_scaled]])[0, 0])
-            if q50_key in predictions:
-                q50_scaled = float(np.asarray(predictions[q50_key][0]).reshape(-1)[0])
-                q50 = float(predictor.price_scaler.inverse_transform([[q50_scaled]])[0, 0])
-        except Exception:
-            q10 = q50 = q90 = None
-
-        try:
-            crash_key = f'crash_{horizon}h'
-            pump_key = f'pump_{horizon}h'
-            if crash_key in predictions:
-                crash_prob = float(np.asarray(predictions[crash_key][0]).reshape(-1)[0])
-            if pump_key in predictions:
-                pump_prob = float(np.asarray(predictions[pump_key][0]).reshape(-1)[0])
-        except Exception:
-            crash_prob = pump_prob = None
         
         if isinstance(pred_scaled, np.ndarray):
             pred_scaled = float(pred_scaled.flatten()[0])
         
-        # Use relative prediction approach to avoid scaler offset issues
-        # Interpret the scaled prediction as a change: scaled_value * scale = dollar_change
-        # Example: if pred_scaled = 0.06 and scale = 10000, that's +$600 change
-        dollar_change = pred_scaled * predictor.price_scaler.scale_[0]
-        
-        # Apply the change to current price
-        pred_price = current_price + dollar_change
-        
-        if hasattr(predictor.price_scaler, 'scale_'):
-            pred_std_price = float(pred_std_scaled.flatten()[0]) * predictor.price_scaler.scale_[0]
-        else:
-            pred_std_price = float(pred_std_scaled.flatten()[0]) * 1000
-        
-        card = create_prediction_card(
-            horizon,
-            label,
-            current_price,
-            pred_price,
-            pred_std_price,
-            direction_prob,
-            predictor,
-            q10=q10,
-            q50=q50,
-            q90=q90,
-            crash_prob=crash_prob,
-            pump_prob=pump_prob,
-        )
-        prediction_cards.append(card)
+        pred_value = float(predictor.price_scaler.inverse_transform([[pred_scaled]])[0, 0])
 
-    # Sanity check: if model outputs are wildly out of range, show a visible warning.
-    try:
-        if current_price and np.isfinite(float(current_price)) and float(current_price) > 0:
-            ratios = []
-            for c in prediction_cards:
-                p = c.get('predicted_price')
-                if p is None:
-                    continue
-                try:
-                    ratios.append(float(p) / float(current_price))
-                except Exception:
-                    continue
-            if ratios and (max(ratios) > 3.0 or min(ratios) < (1.0 / 3.0)):
-                st.warning(
-                    "Model outputs look unstable (some horizons are >3x or <1/3x current price). "
-                    "This usually means the latest retrain diverged — try retraining with the updated code (lower LR + gradient clipping)."
-                )
-    except Exception:
-        pass
+        if target_type == 'return':
+            pred_return = pred_value
+            pred_price = float(current_price) * (1.0 + pred_return)
+
+            std_return = float(np.asarray(pred_std_scaled).reshape(-1)[0])
+            if hasattr(predictor.price_scaler, 'scale_'):
+                std_return = std_return * float(predictor.price_scaler.scale_[0])
+            std_price_mc = abs(float(current_price) * std_return)
+
+            std_price_real = 0.0
+            if np.isfinite(realized_std_1h) and realized_std_1h > 0:
+                std_price_real = abs(float(current_price) * realized_std_1h * (float(horizon) ** 0.5))
+
+            pred_std_price = max(std_price_mc, std_price_real)
+        else:
+            pred_price = pred_value
+            if hasattr(predictor.price_scaler, 'scale_'):
+                pred_std_price = float(np.asarray(pred_std_scaled).reshape(-1)[0]) * float(predictor.price_scaler.scale_[0])
+            else:
+                pred_std_price = float(np.asarray(pred_std_scaled).reshape(-1)[0]) * 1000
+        
+        card = create_prediction_card(horizon, label, current_price, pred_price, 
+                                     pred_std_price, direction_prob, predictor)
+        prediction_cards.append(card)
 
     # Store predictions now for future historical charts (best-effort)
     _append_prediction_log(prediction_cards, float(current_price))
@@ -2627,58 +2576,6 @@ def main():
         _render_price_accuracy_badge(accuracy_text),
         unsafe_allow_html=True,
     )
-
-    # Shock alert badge (best-effort): driven by tail heads + optional geopolitics score
-    try:
-        c24 = next((c for c in prediction_cards if c.get('horizon') == '24H'), None)
-        crash_24 = float(c24.get('crash_prob')) if c24 and c24.get('crash_prob') is not None else None
-        pump_24 = float(c24.get('pump_prob')) if c24 and c24.get('pump_prob') is not None else None
-        risk = None
-        if crash_24 is not None and pump_24 is not None:
-            risk = max(crash_24, pump_24)
-        elif crash_24 is not None:
-            risk = crash_24
-        elif pump_24 is not None:
-            risk = pump_24
-
-        geo_score = None
-        try:
-            if features_df is not None and isinstance(features_df, pd.DataFrame):
-                fnum = features_df.select_dtypes(include=[np.number])
-                if 'geo_risk_score_6h' in fnum.columns:
-                    geo_score = float(fnum['geo_risk_score_6h'].iloc[-1])
-        except Exception:
-            geo_score = None
-
-        if risk is None:
-            shock_badge_ph.markdown(
-                _render_shock_badge('low', 'Tail-risk heads not trained yet', 'Retrain the model to enable crash/pump probabilities.'),
-                unsafe_allow_html=True,
-            )
-        else:
-            level = 'low'
-            if risk >= 0.70:
-                level = 'high'
-            elif risk >= 0.50:
-                level = 'medium'
-
-            # If geopolitics score is elevated, nudge severity up one step.
-            if geo_score is not None and geo_score >= 2.0:
-                level = 'high' if level == 'medium' else ('medium' if level == 'low' else 'high')
-
-            headline = f"24H Crash {((crash_24 or 0.0) * 100):.0f}% · Pump {((pump_24 or 0.0) * 100):.0f}%"
-            detail = None
-            if geo_score is not None:
-                detail = f"Geo risk (6H): {geo_score:.2f}"
-            shock_badge_ph.markdown(
-                _render_shock_badge(level, headline, detail or ""),
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        shock_badge_ph.markdown(
-            _render_shock_badge('low', 'Shock alert unavailable', ''),
-            unsafe_allow_html=True,
-        )
 
     # Loading state complete
     loading_ph.empty()
@@ -2746,12 +2643,13 @@ def main():
             hovertemplate='<b>%{x|%b %d, %Y}</b><br>Predicted: $%{y:,.0f}<extra></extra>'
         ))
 
-        # Calculate y-axis range (responsive): show ±$5k beyond min/max so low/high points don't get clipped.
-        y_min = float(min(daily_agg['actual'].min(), daily_agg['predicted'].min()))
-        y_max = float(max(daily_agg['actual'].max(), daily_agg['predicted'].max()))
-        pad = 5000.0
-        y_axis_min = max(0.0, y_min - pad)
-        y_axis_max = y_max + pad
+        # Calculate y-axis range (expand to ~10k range to minimize visual gaps)
+        y_min = min(daily_agg['actual'].min(), daily_agg['predicted'].min())
+        y_max = max(daily_agg['actual'].max(), daily_agg['predicted'].max())
+        y_center = (y_min + y_max) / 2
+        y_range_target = 10000
+        y_axis_min = max(0, y_center - y_range_target / 2)
+        y_axis_max = y_center + y_range_target / 2
 
         title_suffix = f" • Accuracy: {acc_roll:.1f}%" if acc_roll is not None else ""
         fig_roll.update_layout(
@@ -2853,24 +2751,6 @@ def main():
                 'HOLD': 'signal-hold'
             }
 
-            range_line = ""
-            if card.get('q10') is not None and card.get('q90') is not None:
-                range_line = (
-                    f"<div style='margin-top: 0.35rem; font-size: 0.86rem; color: var(--dsba-text-2);'>"
-                    f"P10–P90: ${card['q10']:,.0f} – ${card['q90']:,.0f}"
-                    f"</div>"
-                )
-
-            risk_line = ""
-            if card.get('crash_prob') is not None or card.get('pump_prob') is not None:
-                crash_p = float(card.get('crash_prob') or 0.0)
-                pump_p = float(card.get('pump_prob') or 0.0)
-                risk_line = (
-                    f"<div style='margin-top: 0.15rem; font-size: 0.84rem; color: var(--dsba-text-2);'>"
-                    f"Tail risk: Crash {crash_p*100:.0f}% · Pump {pump_p*100:.0f}%"
-                    f"</div>"
-                )
-
             kpi_html = textwrap.dedent(f"""\
             <div class="kpi-card">
                 <div class="kpi-header">
@@ -2879,9 +2759,6 @@ def main():
                 </div>
                 <div class="kpi-price">${card['predicted_price']:,.0f}</div>
                 <div class="kpi-change {change_class}">{change_arrow} {abs(card['change_pct']):.2f}%</div>
-
-                {range_line}
-                {risk_line}
 
                 <div class="confidence-gauge">
                     <div class="confidence-label">Confidence</div>
@@ -2911,24 +2788,6 @@ def main():
                 'HOLD': 'signal-hold'
             }
 
-            range_line = ""
-            if card.get('q10') is not None and card.get('q90') is not None:
-                range_line = (
-                    f"<div style='margin-top: 0.35rem; font-size: 0.86rem; color: var(--dsba-text-2);'>"
-                    f"P10–P90: ${card['q10']:,.0f} – ${card['q90']:,.0f}"
-                    f"</div>"
-                )
-
-            risk_line = ""
-            if card.get('crash_prob') is not None or card.get('pump_prob') is not None:
-                crash_p = float(card.get('crash_prob') or 0.0)
-                pump_p = float(card.get('pump_prob') or 0.0)
-                risk_line = (
-                    f"<div style='margin-top: 0.15rem; font-size: 0.84rem; color: var(--dsba-text-2);'>"
-                    f"Tail risk: Crash {crash_p*100:.0f}% · Pump {pump_p*100:.0f}%"
-                    f"</div>"
-                )
-
             kpi_html = textwrap.dedent(f"""\
             <div class="kpi-card">
                 <div class="kpi-header">
@@ -2937,9 +2796,6 @@ def main():
                 </div>
                 <div class="kpi-price">${card['predicted_price']:,.0f}</div>
                 <div class="kpi-change {change_class}">{change_arrow} {abs(card['change_pct']):.2f}%</div>
-
-                {range_line}
-                {risk_line}
 
                 <div class="confidence-gauge">
                     <div class="confidence-label">Confidence</div>
@@ -3151,12 +3007,8 @@ def main():
             hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.2f}<extra></extra>'
         ))
 
-        # Responsive y-axis range: ±$5k beyond min/max
-        y_min = float(recent['close'].min())
-        y_max = float(recent['close'].max())
-        pad = 5000.0
-        y_axis_min = max(0.0, y_min - pad)
-        y_axis_max = y_max + pad
+        y_min = float(recent['close'].min()) * 0.985
+        y_max = float(recent['close'].max()) * 1.015
 
         fig_historical.update_layout(
             title=dict(
@@ -3194,8 +3046,7 @@ def main():
                 linecolor=plot_border,
                 tickfont=dict(color=plot_text_color),
                 title_font=dict(color=plot_text_color),
-                tickformat='$,.0f',
-                range=[y_axis_min, y_axis_max]
+                tickformat='$,.0f'
             )
         )
 

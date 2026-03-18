@@ -102,10 +102,7 @@ class EnhancedCryptoPricePredictor:
         dropout_rate: float = 0.3,
         learning_rate: float = 0.001,
         use_mixed_precision: bool = True,
-        mc_dropout_samples: int = 10,
-        quantiles: List[float] = [0.1, 0.5, 0.9],
-        crash_threshold_pct: float = 5.0,
-        pump_threshold_pct: float = 5.0,
+        mc_dropout_samples: int = 10
     ):
         self.sequence_length = sequence_length
         self.prediction_horizons = prediction_horizons
@@ -120,9 +117,6 @@ class EnhancedCryptoPricePredictor:
         self.dropout_rate = dropout_rate
         self.learning_rate = learning_rate
         self.mc_dropout_samples = mc_dropout_samples
-        self.quantiles = []  # DISABLED: training with identical targets causes divergence
-        self.crash_threshold_pct = float(crash_threshold_pct)
-        self.pump_threshold_pct = float(pump_threshold_pct)
         
         # Enable mixed precision for faster training
         if use_mixed_precision and tf.config.list_physical_devices('GPU'):
@@ -134,23 +128,16 @@ class EnhancedCryptoPricePredictor:
         self.scaler_X = RobustScaler()
         self.scaler_y = RobustScaler()
         self.feature_names = []
+        # What the model's `price_*` heads represent.
+        # - 'price': scaled absolute future close (legacy)
+        # - 'return': scaled fractional return over the horizon (recommended)
+        self.target_type = 'price'
         self.training_history = None
         
         # Dynamic thresholds for direction classification
         self.dynamic_thresholds = {'up': 2.0, 'down': -2.0}  # Will be updated
         
         logger.info(f"EnhancedCryptoPricePredictor initialized ({architecture} architecture)")
-
-    @staticmethod
-    def _pinball_loss(q: float):
-        """Quantile (pinball) loss for a fixed quantile q in (0,1)."""
-        q = float(q)
-
-        def loss(y_true, y_pred):
-            e = y_true - y_pred
-            return tf.reduce_mean(tf.maximum(q * e, (q - 1.0) * e))
-
-        return loss
     
     def build_model(self) -> Model:
         """Build enhanced hybrid model"""
@@ -191,74 +178,47 @@ class EnhancedCryptoPricePredictor:
         # Dense layers with MC Dropout
         for units in self.dense_units:
             x = layers.Dense(units, activation='relu')(x)
-            x = layers.Dropout(self.dropout_rate)(x, training=True)  # Always on for MC
+            x = layers.Dropout(self.dropout_rate)(x)
             x = layers.BatchNormalization()(x)
         
-        # Multi-horizon outputs (dict outputs so we can train/predict by name)
-        outputs: Dict[str, layers.Layer] = {}
+        # Multi-horizon outputs
+        outputs = {}
         for horizon in self.prediction_horizons:
-            # Point estimate (scaled price)
-            outputs[f'price_{horizon}h'] = layers.Dense(1, activation='linear', name=f'price_{horizon}h')(x)
-
-            # Quantiles (scaled price)
-            for q in self.quantiles:
-                q_label = int(round(float(q) * 100))
-                outputs[f'price_p{q_label}_{horizon}h'] = layers.Dense(
-                    1,
-                    activation='linear',
-                    name=f'price_p{q_label}_{horizon}h',
-                )(x)
-
+            # Price prediction
+            price_out = layers.Dense(1, activation='linear', name=f'price_{horizon}h')(x)
+            outputs[f'price_{horizon}h'] = price_out
+            
             # Direction (up/neutral/down)
-            outputs[f'direction_{horizon}h'] = layers.Dense(3, activation='softmax', name=f'direction_{horizon}h')(x)
-
+            dir_out = layers.Dense(3, activation='softmax', name=f'direction_{horizon}h')(x)
+            outputs[f'direction_{horizon}h'] = dir_out
+            
             # Volatility
-            outputs[f'volatility_{horizon}h'] = layers.Dense(1, activation='softplus', name=f'volatility_{horizon}h')(x)
-
-            # DISABLED: Tail-event risk heads (causing instability)
-            # outputs[f'crash_{horizon}h'] = layers.Dense(1, activation='sigmoid', name=f'crash_{horizon}h')(x)
-            # outputs[f'pump_{horizon}h'] = layers.Dense(1, activation='sigmoid', name=f'pump_{horizon}h')(x)
-
-        model = Model(inputs=inputs, outputs=outputs)
+            vol_out = layers.Dense(1, activation='softplus', name=f'volatility_{horizon}h')(x)
+            outputs[f'volatility_{horizon}h'] = vol_out
+        
+        model = Model(inputs=inputs, outputs=list(outputs.values()))
         
         # Compile with loss weights
-        loss_dict: Dict[str, object] = {}
-        loss_weights_dict: Dict[str, float] = {}
-        metrics_dict: Dict[str, list] = {}
-
-        for horizon in self.prediction_horizons:
-            # Shorter horizons get slightly more weight
-            weight_factor = 1.0 / float(horizon)
-
-            loss_dict[f'price_{horizon}h'] = 'huber'
-            loss_weights_dict[f'price_{horizon}h'] = weight_factor
-            metrics_dict[f'price_{horizon}h'] = ['mae']
-
-            for q in self.quantiles:
-                q_label = int(round(float(q) * 100))
-                key = f'price_p{q_label}_{horizon}h'
-                loss_dict[key] = self._pinball_loss(q)
-                # Quantiles are useful but can destabilize training if overweighted.
-                loss_weights_dict[key] = weight_factor * 0.2
-
-            loss_dict[f'direction_{horizon}h'] = 'categorical_crossentropy'
-            loss_weights_dict[f'direction_{horizon}h'] = weight_factor * 0.5
-            metrics_dict[f'direction_{horizon}h'] = ['accuracy']
-
-            loss_dict[f'volatility_{horizon}h'] = 'mse'
-            loss_weights_dict[f'volatility_{horizon}h'] = weight_factor * 0.3
-            metrics_dict[f'volatility_{horizon}h'] = ['mae']
-
-            # DISABLED: crash/pump heads removed
-            # loss_dict[f'crash_{horizon}h'] = 'binary_crossentropy'
-            # loss_weights_dict[f'crash_{horizon}h'] = weight_factor * 0.2
-            # metrics_dict[f'crash_{horizon}h'] = ['accuracy']
-
-            # loss_dict[f'pump_{horizon}h'] = 'binary_crossentropy'
-            # loss_weights_dict[f'pump_{horizon}h'] = weight_factor * 0.2
-            # metrics_dict[f'pump_{horizon}h'] = ['accuracy']
+        loss_dict = {}
+        loss_weights_dict = {}
+        metrics_dict = {}
         
-        optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
+        for horizon in self.prediction_horizons:
+            loss_dict[f'price_{horizon}h'] = 'huber'
+            loss_dict[f'direction_{horizon}h'] = 'categorical_crossentropy'
+            loss_dict[f'volatility_{horizon}h'] = 'mse'
+            
+            # Shorter horizons get slightly more weight
+            weight_factor = 1.0 / horizon
+            loss_weights_dict[f'price_{horizon}h'] = weight_factor
+            loss_weights_dict[f'direction_{horizon}h'] = weight_factor * 0.5
+            loss_weights_dict[f'volatility_{horizon}h'] = weight_factor * 0.3
+            
+            metrics_dict[f'price_{horizon}h'] = ['mae']
+            metrics_dict[f'direction_{horizon}h'] = ['accuracy']
+            metrics_dict[f'volatility_{horizon}h'] = ['mae']
+        
+        optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate)
         
         model.compile(
             optimizer=optimizer,
@@ -312,15 +272,17 @@ class EnhancedCryptoPricePredictor:
     ) -> Tuple:
         """Prepare sequences for multi-horizon prediction"""
         logger.info(f"Preparing multi-horizon sequences...")
-        
-        self.feature_names = [col for col in data.columns if col != target_col]
+
+        # Include the current price level (target column) as an input feature.
+        # Without it, the model has no direct notion of absolute price scale and
+        # tends to regress toward the scaler median when markets drift.
+        self.feature_names = list(data.columns)
         
         features = data[self.feature_names].values
         target = data[target_col].values
         
-        # Scale
+        # Scale features (X) now.
         features_scaled = self.scaler_X.fit_transform(features)
-        target_scaled = self.scaler_y.fit_transform(target.reshape(-1, 1)).flatten()
         
         # Calculate dynamic thresholds based on historical volatility
         returns = np.diff(target) / target[:-1] * 100
@@ -337,14 +299,8 @@ class EnhancedCryptoPricePredictor:
         # Initialize output dictionaries
         for horizon in self.prediction_horizons:
             y_dict[f'price_{horizon}h'] = []
-            for q in self.quantiles:
-                q_label = int(round(float(q) * 100))
-                y_dict[f'price_p{q_label}_{horizon}h'] = []
             y_dict[f'direction_{horizon}h'] = []
             y_dict[f'volatility_{horizon}h'] = []
-            # DISABLED: crash/pump heads removed
-            # y_dict[f'crash_{horizon}h'] = []
-            # y_dict[f'pump_{horizon}h'] = []
         
         for i in range(len(data) - self.sequence_length - max_horizon):
             X.append(features_scaled[i:i + self.sequence_length])
@@ -355,15 +311,18 @@ class EnhancedCryptoPricePredictor:
                 future_idx = i + self.sequence_length + horizon - 1
                 future_price = target[future_idx]
                 
-                # Price target
-                y_val = float(target_scaled[future_idx])
-                y_dict[f'price_{horizon}h'].append(y_val)
-                for q in self.quantiles:
-                    q_label = int(round(float(q) * 100))
-                    y_dict[f'price_p{q_label}_{horizon}h'].append(y_val)
+                # Price target: predict fractional return over the horizon.
+                # This anchors predictions to the current level and avoids
+                # median-regression when the market regime drifts.
+                if current_price == 0:
+                    horizon_return = 0.0
+                else:
+                    horizon_return = (future_price - current_price) / current_price
+
+                y_dict[f'price_{horizon}h'].append(horizon_return)
                 
                 # Direction target (using dynamic thresholds)
-                pct_change = ((future_price - current_price) / current_price) * 100
+                pct_change = horizon_return * 100
                 if pct_change > self.dynamic_thresholds['up']:
                     direction = [0, 0, 1]  # Up
                 elif pct_change < self.dynamic_thresholds['down']:
@@ -371,34 +330,28 @@ class EnhancedCryptoPricePredictor:
                 else:
                     direction = [0, 1, 0]  # Neutral
                 y_dict[f'direction_{horizon}h'].append(direction)
-
-                # DISABLED: Crash/pump targets removed
-                # y_dict[f'crash_{horizon}h'].append(1.0 if pct_change <= -self.crash_threshold_pct else 0.0)
-                # y_dict[f'pump_{horizon}h'].append(1.0 if pct_change >= self.pump_threshold_pct else 0.0)
                 
-                # Volatility target (std of returns in horizon window)
-                if future_idx + horizon < len(target):
-                    window = target[future_idx:future_idx + horizon]
-                    window_returns = np.diff(window) / window[:-1]
-                    volatility = np.std(window_returns) if len(window_returns) > 0 else 0
-                else:
-                    volatility = 0
-                y_dict[f'volatility_{horizon}h'].append(volatility)
+                # Volatility target: magnitude of the horizon return.
+                # This provides a stable, non-degenerate uncertainty proxy
+                # (especially for 1h where std over a 1-step window is 0).
+                y_dict[f'volatility_{horizon}h'].append(abs(horizon_return))
+
+        # Fit/transform y scaler on all horizon returns (shared scale).
+        all_returns = []
+        for horizon in self.prediction_horizons:
+            all_returns.append(np.asarray(y_dict[f'price_{horizon}h'], dtype=np.float32).reshape(-1, 1))
+        if all_returns:
+            all_returns_arr = np.vstack(all_returns)
+            self.scaler_y.fit(all_returns_arr)
+            for horizon in self.prediction_horizons:
+                r = np.asarray(y_dict[f'price_{horizon}h'], dtype=np.float32).reshape(-1, 1)
+                y_dict[f'price_{horizon}h'] = self.scaler_y.transform(r).flatten()
+
+        self.target_type = 'return'
         
         X = np.array(X)
-
-        for key in list(y_dict.keys()):
-            arr = np.array(y_dict[key])
-            # Dense(1) heads expect shape (N, 1)
-            if key.startswith('price_') and not key.startswith('price_p'):
-                arr = arr.reshape(-1, 1)
-            elif key.startswith('price_p'):
-                arr = arr.reshape(-1, 1)
-            elif key.startswith('volatility_'):
-                arr = arr.reshape(-1, 1)
-            elif key.startswith('crash_') or key.startswith('pump_'):
-                arr = arr.reshape(-1, 1)
-            y_dict[key] = arr
+        for key in y_dict:
+            y_dict[key] = np.array(y_dict[key])
         
         logger.info(f"Created {len(X)} sequences with {max_horizon}h max horizon")
         return X, y_dict
@@ -411,51 +364,62 @@ class EnhancedCryptoPricePredictor:
         """Predict with Monte Carlo dropout for uncertainty estimation"""
         if n_samples is None:
             n_samples = self.mc_dropout_samples
+
+        # IMPORTANT: MC-dropout requires enabling training mode for dropout layers,
+        # but BatchNorm layers should remain in inference mode. Otherwise, with small
+        # batch sizes (common in real-time inference) BatchNorm can collapse outputs
+        # and artificially drive uncertainty toward ~0.
+        bn_layers: List[layers.BatchNormalization] = []
+        bn_trainable_states: List[bool] = []
+        try:
+            seen = set()
+            for layer in getattr(self.model, 'submodules', []):
+                if isinstance(layer, layers.BatchNormalization) and id(layer) not in seen:
+                    seen.add(id(layer))
+                    bn_layers.append(layer)
+                    bn_trainable_states.append(bool(layer.trainable))
+                    layer.trainable = False
+        except Exception:
+            bn_layers = []
+            bn_trainable_states = []
         
         predictions = []
-        for _ in range(n_samples):
-            pred = self.model.predict(X, verbose=0)
-            predictions.append(pred)
+        try:
+            for _ in range(n_samples):
+                # IMPORTANT: `model.predict()` runs with training=False which disables dropout.
+                # For MC Dropout uncertainty we must force training=True.
+                pred = self.model(X, training=True)
 
-        # Support both:
-        # - New models: dict outputs (preferred)
-        # - Legacy models: list outputs in groups of 3 per horizon
-        first = predictions[0]
-        results: Dict[str, np.ndarray] = {}
+                # `pred` can be a list/tuple of tensors (multi-output model) or a single tensor.
+                if isinstance(pred, (list, tuple)):
+                    pred_np = [p.numpy() if hasattr(p, "numpy") else np.asarray(p) for p in pred]
+                else:
+                    pred_np = [pred.numpy() if hasattr(pred, "numpy") else np.asarray(pred)]
 
-        if isinstance(first, dict):
-            keys = list(first.keys())
-            for k in keys:
-                stacked = np.stack([p[k] for p in predictions], axis=0)
-                results[k] = np.mean(stacked, axis=0)
-
-            # For backwards-compat UI: add std for main price + direction
-            for horizon in self.prediction_horizons:
-                pk = f'price_{horizon}h'
-                dk = f'direction_{horizon}h'
-                if pk in first:
-                    stacked = np.stack([p[pk] for p in predictions], axis=0)
-                    results[f'{pk}_std'] = np.std(stacked, axis=0)
-                if dk in first:
-                    stacked = np.stack([p[dk] for p in predictions], axis=0)
-                    results[f'{dk}_std'] = np.std(stacked, axis=0)
-
-            return results
-
-        # Legacy list output handling
+                predictions.append(pred_np)
+        finally:
+            for layer, was_trainable in zip(bn_layers, bn_trainable_states):
+                try:
+                    layer.trainable = was_trainable
+                except Exception:
+                    pass
+        
+        # Calculate mean and std across MC samples
+        results = {}
         for i, horizon in enumerate(self.prediction_horizons):
-            price_preds = [p[i * 3] for p in predictions]
-            dir_preds = [p[i * 3 + 1] for p in predictions]
-            vol_preds = [p[i * 3 + 2] for p in predictions]
-
+            price_preds = [p[i*3] for p in predictions]
+            dir_preds = [p[i*3+1] for p in predictions]
+            vol_preds = [p[i*3+2] for p in predictions]
+            
+            # Mean predictions
             results[f'price_{horizon}h'] = np.mean(price_preds, axis=0)
             results[f'price_{horizon}h_std'] = np.std(price_preds, axis=0)
-
+            
             results[f'direction_{horizon}h'] = np.mean(dir_preds, axis=0)
             results[f'direction_{horizon}h_std'] = np.std(dir_preds, axis=0)
-
+            
             results[f'volatility_{horizon}h'] = np.mean(vol_preds, axis=0)
-
+        
         return results
     
     def save_model_full(self, base_path: str = 'models/enhanced_predictor'):
@@ -471,15 +435,12 @@ class EnhancedCryptoPricePredictor:
             'scaler_y': self.scaler_y,
             'feature_names': self.feature_names,
             'dynamic_thresholds': self.dynamic_thresholds,
+            'target_type': getattr(self, 'target_type', 'price'),
             'config': {
                 'sequence_length': self.sequence_length,
                 'prediction_horizons': self.prediction_horizons,
                 'n_features': self.n_features,
-                'architecture': self.architecture,
-                'quantiles': self.quantiles,
-                'crash_threshold_pct': self.crash_threshold_pct,
-                'pump_threshold_pct': self.pump_threshold_pct,
-                'output_schema_version': 2,
+                'architecture': self.architecture
             }
         }
         
@@ -555,12 +516,6 @@ class HeterogeneousEnsemble:
                 
                 for i, model in enumerate(self.models):
                     logger.info(f"  Training {model.architecture} model...")
-
-                    y_train_fit = y_train
-                    y_val_fit = y_val
-                    if isinstance(model.model.output, dict):
-                        y_train_fit = {name: y_train[name] for name in model.model.output_names if name in y_train}
-                        y_val_fit = {name: y_val[name] for name in model.model.output_names if name in y_val}
                     
                     # Prepare y for this model
                     y_train_list = []
@@ -579,8 +534,8 @@ class HeterogeneousEnsemble:
                     
                     history = model.model.fit(
                         X_train,
-                        (y_train_fit if isinstance(model.model.output, dict) else y_train_list),
-                        validation_data=(X_val, (y_val_fit if isinstance(model.model.output, dict) else y_val_list)),
+                        y_train_list,
+                        validation_data=(X_val, y_val_list),
                         epochs=epochs,
                         batch_size=batch_size,
                         callbacks=[
@@ -608,22 +563,7 @@ class HeterogeneousEnsemble:
             # Simple train on full data
             for i, model in enumerate(self.models):
                 logger.info(f"Training {model.architecture} model...")
-
-                if isinstance(model.model.output, dict):
-                    y_train = {name: y_dict[name] for name in model.model.output_names if name in y_dict}
-                    model.model.fit(
-                        X,
-                        y_train,
-                        validation_split=validation_split,
-                        epochs=epochs,
-                        batch_size=batch_size,
-                        callbacks=[
-                            keras.callbacks.EarlyStopping(patience=15, restore_best_weights=True)
-                        ],
-                        verbose=1
-                    )
-                    continue
-
+                
                 y_train_list = []
                 for horizon in model.prediction_horizons:
                     y_train_list.extend([
@@ -631,10 +571,9 @@ class HeterogeneousEnsemble:
                         y_dict[f'direction_{horizon}h'],
                         y_dict[f'volatility_{horizon}h']
                     ])
-
+                
                 model.model.fit(
-                    X,
-                    y_train_list,
+                    X, y_train_list,
                     validation_split=validation_split,
                     epochs=epochs,
                     batch_size=batch_size,
@@ -657,14 +596,11 @@ class HeterogeneousEnsemble:
                 pred = model.predict_with_uncertainty(X)
             else:
                 pred_raw = model.model.predict(X, verbose=0)
-                if isinstance(pred_raw, dict):
-                    pred = pred_raw
-                else:
-                    pred = {}
-                    for i, horizon in enumerate(model.prediction_horizons):
-                        pred[f'price_{horizon}h'] = pred_raw[i*3]
-                        pred[f'direction_{horizon}h'] = pred_raw[i*3+1]
-                        pred[f'volatility_{horizon}h'] = pred_raw[i*3+2]
+                pred = {}
+                for i, horizon in enumerate(model.prediction_horizons):
+                    pred[f'price_{horizon}h'] = pred_raw[i*3]
+                    pred[f'direction_{horizon}h'] = pred_raw[i*3+1]
+                    pred[f'volatility_{horizon}h'] = pred_raw[i*3+2]
             
             all_predictions.append((pred, weight))
         
@@ -672,46 +608,23 @@ class HeterogeneousEnsemble:
         ensemble_pred = {}
         
         for horizon in self.prediction_horizons:
-            # Core heads
-            price_key = f'price_{horizon}h'
-            dir_key = f'direction_{horizon}h'
-            vol_key = f'volatility_{horizon}h'
-            crash_key = f'crash_{horizon}h'
-            pump_key = f'pump_{horizon}h'
-
-            if all(price_key in p[0] for p in all_predictions):
-                price_preds = [p[0][price_key] * p[1] for p in all_predictions]
-                ensemble_pred[price_key] = np.sum(price_preds, axis=0)
-
-            if all(dir_key in p[0] for p in all_predictions):
-                dir_preds = [p[0][dir_key] * p[1] for p in all_predictions]
-                ensemble_pred[dir_key] = np.sum(dir_preds, axis=0)
-                ensemble_pred[f'{dir_key}_class'] = np.argmax(ensemble_pred[dir_key], axis=-1)
-
-            if all(vol_key in p[0] for p in all_predictions):
-                vol_preds = [p[0][vol_key] * p[1] for p in all_predictions]
-                ensemble_pred[vol_key] = np.sum(vol_preds, axis=0)
-
-            # Tail heads
-            if all(crash_key in p[0] for p in all_predictions):
-                crash_preds = [p[0][crash_key] * p[1] for p in all_predictions]
-                ensemble_pred[crash_key] = np.sum(crash_preds, axis=0)
-            if all(pump_key in p[0] for p in all_predictions):
-                pump_preds = [p[0][pump_key] * p[1] for p in all_predictions]
-                ensemble_pred[pump_key] = np.sum(pump_preds, axis=0)
-
-            # Quantiles (if present)
-            sample_pred_keys = list(all_predictions[0][0].keys())
-            q_keys = [k for k in sample_pred_keys if k.startswith('price_p') and k.endswith(f'_{horizon}h')]
-            for qk in q_keys:
-                if all(qk in p[0] for p in all_predictions):
-                    q_preds = [p[0][qk] * p[1] for p in all_predictions]
-                    ensemble_pred[qk] = np.sum(q_preds, axis=0)
-
-            # Uncertainty: std across models (price only)
-            if use_uncertainty and all(price_key in p[0] for p in all_predictions):
-                price_std = np.std([p[0][price_key] for p in all_predictions], axis=0)
-                ensemble_pred[f'{price_key}_uncertainty'] = price_std
+            # Price: weighted average
+            price_preds = [p[0][f'price_{horizon}h'] * p[1] for p in all_predictions]
+            ensemble_pred[f'price_{horizon}h'] = np.sum(price_preds, axis=0)
+            
+            # Direction: weighted average of probabilities
+            dir_preds = [p[0][f'direction_{horizon}h'] * p[1] for p in all_predictions]
+            ensemble_pred[f'direction_{horizon}h'] = np.sum(dir_preds, axis=0)
+            ensemble_pred[f'direction_{horizon}h_class'] = np.argmax(ensemble_pred[f'direction_{horizon}h'], axis=-1)
+            
+            # Volatility: weighted average
+            vol_preds = [p[0][f'volatility_{horizon}h'] * p[1] for p in all_predictions]
+            ensemble_pred[f'volatility_{horizon}h'] = np.sum(vol_preds, axis=0)
+            
+            # Uncertainty: std across models
+            if use_uncertainty:
+                price_std = np.std([p[0][f'price_{horizon}h'] for p in all_predictions], axis=0)
+                ensemble_pred[f'price_{horizon}h_uncertainty'] = price_std
         
         return ensemble_pred
     

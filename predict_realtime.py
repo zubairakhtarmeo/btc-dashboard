@@ -30,7 +30,66 @@ METADATA_PATH = MODELS_DIR / 'bitcoin_real_simplified_metadata.pkl'
 from enhanced_predictor import EnhancedCryptoPricePredictor
 from data_collector import CryptoDataCollector
 
-from simple_features import add_simple_features
+def add_simple_features(df):
+    """Add basic features matching train_simple.py exactly"""
+    df = df.copy()
+    
+    # Basic returns
+    for h in [1, 6, 12, 24, 48, 168]:
+        df[f'return_{h}h'] = df['close'].pct_change(h)
+        df[f'log_return_{h}h'] = np.log1p(df[f'return_{h}h'])
+    
+    # Simple moving averages
+    for period in [7, 14, 21, 50, 100, 200]:
+        df[f'sma_{period}'] = df['close'].rolling(period).mean()
+        df[f'distance_sma_{period}'] = (df['close'] - df[f'sma_{period}']) / df[f'sma_{period}']
+    
+    # Volatility
+    for period in [7, 14, 21, 50]:
+        df[f'volatility_{period}'] = df['return_1h'].rolling(period).std()
+    
+    # Volume indicators
+    df['volume_sma_20'] = df['volume'].rolling(20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['rsi_14'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    ema_12 = df['close'].ewm(span=12).mean()
+    ema_26 = df['close'].ewm(span=26).mean()
+    df['macd'] = ema_12 - ema_26
+    df['macd_signal'] = df['macd'].ewm(span=9).mean()
+    df['macd_histogram'] = df['macd'] - df['macd_signal']
+    
+    # Bollinger Bands
+    df['bb_middle'] = df['close'].rolling(20).mean()
+    bb_std = df['close'].rolling(20).std()
+    df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
+    df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+    df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
+    
+    # ATR
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    df['atr_14'] = true_range.rolling(14).mean()
+    df['atr_ratio'] = df['atr_14'] / df['close']
+    
+    # Momentum
+    df['momentum_consistency'] = (
+        np.sign(df['return_1h']) == np.sign(df['return_6h'])
+    ).astype(int)
+    
+    df_clean = df.dropna()
+    return df_clean
 
 def predict_live():
     """
@@ -82,46 +141,21 @@ def predict_live():
     import pickle
     with open(METADATA_PATH, 'rb') as f:
         metadata = pickle.load(f)
+
+    target_type = metadata.get('target_type') or metadata.get('config', {}).get('target_type') or 'price'
     
-    # Pull recent news to build explicit geopolitics/news features (best-effort)
-    news_df = None
-    try:
-        news_df = collector.news_collector.get_news('bitcoin', hours_back=72)
-    except Exception:
-        news_df = None
-
-    # Pull derivatives/liquidations/options (best-effort)
-    alt_bundle = {
-        'derivatives': None,
-        'funding_rates': None,
-        'liquidations': None,
-        'options_flow': None,
-    }
-    try:
-        from alternative_data import AlternativeDataCollector
-
-        alt = AlternativeDataCollector(api_keys={})
-        alt_bundle = {
-            'derivatives': alt.get_derivatives_data('bitcoin'),
-            'funding_rates': alt.get_funding_rates('bitcoin'),
-            'liquidations': alt.get_liquidation_data('bitcoin'),
-            'options_flow': alt.get_options_flow('bitcoin'),
-        }
-    except Exception:
-        alt_bundle = alt_bundle
-
     # Generate features using the SAME method as training
-    features_df = add_simple_features(
-        price_data,
-        news_df=news_df,
-        derivatives_df=alt_bundle.get('derivatives'),
-        funding_df=alt_bundle.get('funding_rates'),
-        liquidations_df=alt_bundle.get('liquidations'),
-        options_df=alt_bundle.get('options_flow'),
-    )
+    features_df = add_simple_features(price_data)
     
     # Remove non-numeric columns and select only model features
     features_df_clean = features_df.select_dtypes(include=[np.number])
+
+    # Realized baseline uncertainty: 1h return std over the last 7 days.
+    # This is a robust fallback when MC-dropout std is ~0 and/or the volatility head is uncalibrated.
+    try:
+        realized_std_1h = float(features_df_clean['return_1h'].tail(168).std())
+    except Exception:
+        realized_std_1h = float('nan')
     feature_names = metadata['feature_names']
     features = features_df_clean[feature_names]
     
@@ -158,11 +192,8 @@ def predict_live():
     # Make predictions
     logger.info("\n Generating predictions...\n")
     
-    # Get feature names (exclude 'close' as it's the target)
-    feature_cols = [col for col in features.columns if col != 'close']
-    
-    # Scale features using loaded scaler
-    features_array = features[feature_cols].values
+    # Scale features using loaded scaler (feature list comes from metadata and may include `close`)
+    features_array = features.values
     features_scaled = predictor.feature_scaler.transform(features_array)
     
     # Create sequence (take last sequence_length rows)
@@ -199,13 +230,28 @@ def predict_live():
         if isinstance(pred_scaled, np.ndarray):
             pred_scaled = float(pred_scaled.flatten()[0])
         
-        # Inverse transform price predictions to original scale
-        pred_price = predictor.price_scaler.inverse_transform([[pred_scaled]])[0, 0]
-        # Scale std by the scaler's scale factor
-        if hasattr(predictor.price_scaler, 'scale_'):
-            pred_std_price = float(pred_std_scaled.flatten()[0]) * predictor.price_scaler.scale_[0]
+        # Decode model output into an absolute price.
+        pred_value = float(predictor.price_scaler.inverse_transform([[pred_scaled]])[0, 0])
+        if target_type == 'return':
+            pred_return = pred_value
+            pred_price = float(current_price) * (1.0 + pred_return)
+
+            std_return = float(pred_std_scaled.flatten()[0])
+            if hasattr(predictor.price_scaler, 'scale_'):
+                std_return = std_return * float(predictor.price_scaler.scale_[0])
+            std_price_mc = abs(float(current_price) * std_return)
+
+            std_price_real = 0.0
+            if np.isfinite(realized_std_1h) and realized_std_1h > 0:
+                std_price_real = abs(float(current_price) * realized_std_1h * (float(horizon) ** 0.5))
+
+            pred_std_price = max(std_price_mc, std_price_real)
         else:
-            pred_std_price = float(pred_std_scaled.flatten()[0]) * 1000  # Fallback estimate
+            pred_price = pred_value
+            if hasattr(predictor.price_scaler, 'scale_'):
+                pred_std_price = float(pred_std_scaled.flatten()[0]) * float(predictor.price_scaler.scale_[0])
+            else:
+                pred_std_price = float(pred_std_scaled.flatten()[0]) * 1000  # Fallback estimate
         
         # Calculate change
         change_pct = ((pred_price - current_price) / current_price) * 100
