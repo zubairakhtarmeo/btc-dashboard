@@ -208,11 +208,13 @@ class EnhancedCryptoPricePredictor:
             loss_dict[f'direction_{horizon}h'] = 'categorical_crossentropy'
             loss_dict[f'volatility_{horizon}h'] = 'mse'
             
-            # Shorter horizons get slightly more weight
+            # Shorter horizons get slightly more weight.
+            # Direction weight is set 3x above price so the model is forced to
+            # commit to a directional prediction rather than regressing to the mean.
             weight_factor = 1.0 / horizon
             loss_weights_dict[f'price_{horizon}h'] = weight_factor
-            loss_weights_dict[f'direction_{horizon}h'] = weight_factor * 0.5
-            loss_weights_dict[f'volatility_{horizon}h'] = weight_factor * 0.3
+            loss_weights_dict[f'direction_{horizon}h'] = weight_factor * 3.0
+            loss_weights_dict[f'volatility_{horizon}h'] = weight_factor * 0.1
             
             metrics_dict[f'price_{horizon}h'] = ['mae']
             metrics_dict[f'direction_{horizon}h'] = ['accuracy']
@@ -270,89 +272,108 @@ class EnhancedCryptoPricePredictor:
         data: pd.DataFrame,
         target_col: str = 'close'
     ) -> Tuple:
-        """Prepare sequences for multi-horizon prediction"""
-        logger.info(f"Preparing multi-horizon sequences...")
+        """Prepare sequences for multi-horizon prediction.
 
-        # Include the current price level (target column) as an input feature.
-        # Without it, the model has no direct notion of absolute price scale and
-        # tends to regress toward the scaler median when markets drift.
+        Two-pass design:
+          Pass 1 — collect raw fractional returns for every (sample, horizon) pair.
+          Threshold — compute Q30/Q70 quantiles from the collected returns to derive
+                      per-horizon direction thresholds that guarantee ~30/40/30 class
+                      balance regardless of the market regime in the training window.
+          Pass 2 — build final y_dict using the computed thresholds.
+        """
+        logger.info("Preparing multi-horizon sequences...")
+
         self.feature_names = list(data.columns)
-        
         features = data[self.feature_names].values
         target = data[target_col].values
-        
-        # Scale features (X) now.
+
         features_scaled = self.scaler_X.fit_transform(features)
-        
-        # Calculate dynamic thresholds based on historical volatility
-        returns = np.diff(target) / target[:-1] * 100
-        volatility = np.std(returns)
-        self.dynamic_thresholds = {
-            'up': volatility * 0.5,  # 0.5 standard deviations
-            'down': -volatility * 0.5
-        }
-        logger.info(f"Dynamic thresholds: up={self.dynamic_thresholds['up']:.2f}%, down={self.dynamic_thresholds['down']:.2f}%")
-        
-        X, y_dict = [], {}
+
         max_horizon = max(self.prediction_horizons)
-        
-        # Initialize output dictionaries
-        for horizon in self.prediction_horizons:
-            y_dict[f'price_{horizon}h'] = []
-            y_dict[f'direction_{horizon}h'] = []
-            y_dict[f'volatility_{horizon}h'] = []
-        
-        for i in range(len(data) - self.sequence_length - max_horizon):
-            X.append(features_scaled[i:i + self.sequence_length])
-            
+        N = len(data) - self.sequence_length - max_horizon
+
+        # ── Pass 1: collect raw returns ───────────────────────────────────────
+        raw_returns: Dict[int, List[float]] = {h: [] for h in self.prediction_horizons}
+        X_list: List[np.ndarray] = []
+
+        for i in range(N):
+            X_list.append(features_scaled[i:i + self.sequence_length])
             current_price = target[i + self.sequence_length - 1]
-            
-            for horizon in self.prediction_horizons:
-                future_idx = i + self.sequence_length + horizon - 1
-                future_price = target[future_idx]
-                
-                # Price target: predict fractional return over the horizon.
-                # This anchors predictions to the current level and avoids
-                # median-regression when the market regime drifts.
-                if current_price == 0:
-                    horizon_return = 0.0
-                else:
-                    horizon_return = (future_price - current_price) / current_price
+            for h in self.prediction_horizons:
+                future_price = target[i + self.sequence_length + h - 1]
+                ret = (
+                    (future_price - current_price) / current_price
+                    if current_price != 0 else 0.0
+                )
+                raw_returns[h].append(ret)
 
-                y_dict[f'price_{horizon}h'].append(horizon_return)
-                
-                # Direction target (using dynamic thresholds)
-                pct_change = horizon_return * 100
-                if pct_change > self.dynamic_thresholds['up']:
-                    direction = [0, 0, 1]  # Up
-                elif pct_change < self.dynamic_thresholds['down']:
-                    direction = [1, 0, 0]  # Down
-                else:
-                    direction = [0, 1, 0]  # Neutral
-                y_dict[f'direction_{horizon}h'].append(direction)
-                
-                # Volatility target: magnitude of the horizon return.
-                # This provides a stable, non-degenerate uncertainty proxy
-                # (especially for 1h where std over a 1-step window is 0).
-                y_dict[f'volatility_{horizon}h'].append(abs(horizon_return))
+        # ── Percentile thresholds (Q30 / Q70) ────────────────────────────────
+        # Using the Q30/Q70 split of each horizon's return distribution gives
+        # exactly ~30 % UP / ~40 % NEUTRAL / ~30 % DOWN labels regardless of
+        # whether the training window is a bull or bear market.  These thresholds
+        # are stored in metadata and logged for transparency.
+        horizon_thresholds: Dict[int, Dict[str, float]] = {}
+        for h in self.prediction_horizons:
+            arr = np.array(raw_returns[h]) * 100.0  # convert to %
+            if len(arr) >= 10:
+                q30 = float(np.percentile(arr, 30))
+                q70 = float(np.percentile(arr, 70))
+            else:
+                # Fallback: sqrt-scaled fixed threshold
+                t = 0.3 * (float(h) ** 0.5)
+                q30, q70 = -t, t
+            horizon_thresholds[h] = {'up': q70, 'down': q30}
+            logger.info(
+                f"  Horizon {h:>3}h direction thresholds: "
+                f"DOWN < {q30:+.3f}% | UP > {q70:+.3f}%"
+            )
 
-        # Fit/transform y scaler on all horizon returns (shared scale).
-        all_returns = []
-        for horizon in self.prediction_horizons:
-            all_returns.append(np.asarray(y_dict[f'price_{horizon}h'], dtype=np.float32).reshape(-1, 1))
-        if all_returns:
-            all_returns_arr = np.vstack(all_returns)
-            self.scaler_y.fit(all_returns_arr)
-            for horizon in self.prediction_horizons:
-                r = np.asarray(y_dict[f'price_{horizon}h'], dtype=np.float32).reshape(-1, 1)
-                y_dict[f'price_{horizon}h'] = self.scaler_y.transform(r).flatten()
+        self.horizon_thresholds = horizon_thresholds
+        # Legacy single-key form kept for backward-compat metadata readers
+        self.dynamic_thresholds = horizon_thresholds.get(
+            min(self.prediction_horizons), {'up': 0.3, 'down': -0.3}
+        )
+
+        # ── Pass 2: build y_dict with direction labels ────────────────────────
+        y_dict: Dict[str, List] = {}
+        for h in self.prediction_horizons:
+            y_dict[f'price_{h}h'] = []
+            y_dict[f'direction_{h}h'] = []
+            y_dict[f'volatility_{h}h'] = []
+
+        for i in range(N):
+            for h in self.prediction_horizons:
+                ret = raw_returns[h][i]
+                pct = ret * 100.0
+                thresh = horizon_thresholds[h]
+
+                y_dict[f'price_{h}h'].append(ret)
+
+                if pct > thresh['up']:
+                    y_dict[f'direction_{h}h'].append([0, 0, 1])  # Up
+                elif pct < thresh['down']:
+                    y_dict[f'direction_{h}h'].append([1, 0, 0])  # Down
+                else:
+                    y_dict[f'direction_{h}h'].append([0, 1, 0])  # Neutral
+
+                y_dict[f'volatility_{h}h'].append(abs(ret))
+
+        # ── Scale price targets (shared RobustScaler across all horizons) ─────
+        all_returns_arr = np.vstack([
+            np.array(y_dict[f'price_{h}h'], dtype=np.float32).reshape(-1, 1)
+            for h in self.prediction_horizons
+        ])
+        self.scaler_y.fit(all_returns_arr)
+        for h in self.prediction_horizons:
+            r = np.array(y_dict[f'price_{h}h'], dtype=np.float32).reshape(-1, 1)
+            y_dict[f'price_{h}h'] = self.scaler_y.transform(r).flatten()
 
         self.target_type = 'return'
-        
-        X = np.array(X)
+
+        X = np.array(X_list)
         for key in y_dict:
             y_dict[key] = np.array(y_dict[key])
-        
+
         logger.info(f"Created {len(X)} sequences with {max_horizon}h max horizon")
         return X, y_dict
     
@@ -435,6 +456,7 @@ class EnhancedCryptoPricePredictor:
             'scaler_y': self.scaler_y,
             'feature_names': self.feature_names,
             'dynamic_thresholds': self.dynamic_thresholds,
+            'horizon_thresholds': getattr(self, 'horizon_thresholds', {}),
             'target_type': getattr(self, 'target_type', 'price'),
             'config': {
                 'sequence_length': self.sequence_length,

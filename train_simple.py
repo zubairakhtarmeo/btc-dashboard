@@ -50,7 +50,7 @@ def add_simple_features(df):
     df['macd'] = ema_12 - ema_26
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
-    
+
     # Bollinger Bands
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
@@ -58,7 +58,7 @@ def add_simple_features(df):
     df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
     df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
+
     # ATR (Average True Range)
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
@@ -67,17 +67,45 @@ def add_simple_features(df):
     true_range = ranges.max(axis=1)
     df['atr_14'] = true_range.rolling(14).mean()
     df['atr_ratio'] = df['atr_14'] / df['close']
-    
+
     # Momentum indicators
     df['momentum_consistency'] = (
         np.sign(df['return_1h']) == np.sign(df['return_6h'])
     ).astype(int)
-    
+
+    # --- Stronger signals: trend momentum, regime, breakout ---
+
+    # EMA slope: rate of change of each EMA over 3 candles.
+    # Captures whether the short/long trend is accelerating or decelerating.
+    df['ema_12_slope'] = ema_12.pct_change(3)
+    df['ema_26_slope'] = ema_26.pct_change(3)
+
+    # Price acceleration: change in 1H momentum (second derivative of price).
+    # Positive = momentum is building; negative = momentum is fading.
+    df['price_accel'] = df['return_1h'] - df['return_1h'].shift(1)
+
+    # Volatility regime: ratio of short-term to long-term volatility.
+    # > 1 means we are in a high-vol period (trending / breaking out).
+    df['vol_regime'] = (df['volatility_7'] / df['volatility_50'].replace(0, np.nan)).clip(0, 5)
+
+    # RSI momentum: how fast RSI is moving (trend-in-trend).
+    df['rsi_slope'] = df['rsi_14'] - df['rsi_14'].shift(6)
+
+    # Proximity to 20-period high / low — captures breakout potential.
+    # Values close to 0 mean price is near the boundary.
+    rolling_high_20 = df['close'].rolling(20).max()
+    rolling_low_20  = df['close'].rolling(20).min()
+    df['price_vs_high_20'] = (df['close'] - rolling_high_20) / rolling_high_20  # ≤ 0
+    df['price_vs_low_20']  = (df['close'] - rolling_low_20)  / rolling_low_20   # ≥ 0
+
+    # MACD acceleration: is the MACD histogram momentum rising or falling?
+    df['macd_accel'] = df['macd_histogram'] - df['macd_histogram'].shift(3)
+
     # Remove rows with NaN (keep at least 250 rows = ~10 days minimal)
     df_clean = df.dropna()
     logger.info(f"Removed {len(df) - len(df_clean)} rows with NaN values")
     logger.info(f"Remaining samples: {len(df_clean)}")
-    
+
     return df_clean
 
 def main():
@@ -86,15 +114,25 @@ def main():
     print("="*70)
     print()
     
-    # 1. Collect real data (2000 hours = ~83 days)
-    logger.info("📊 Step 1: Collecting real Bitcoin data...")
-    collector = CryptoDataCollector()
-    data = collector.collect_all_data('bitcoin', hours_back=2000)
-    
-    price_df = data['price'].copy()
-    logger.info(f"✓ Collected {len(price_df)} price records")
-    logger.info(f"✓ Date range: {price_df.index.min()} to {price_df.index.max()}")
-    logger.info(f"✓ Price range: ${price_df['close'].min():.2f} - ${price_df['close'].max():.2f}")
+    # 1. Load price data — prefer the large pre-fetched dataset if available.
+    logger.info("Step 1: Loading Bitcoin price data...")
+    import os as _os
+    _large_cache = _os.path.join('cache', 'price_bitcoin_20000_1h.pkl')
+    if _os.path.exists(_large_cache):
+        price_df = pd.read_pickle(_large_cache)
+        # Ensure UTC DatetimeIndex
+        if not isinstance(price_df.index, pd.DatetimeIndex):
+            price_df.index = pd.to_datetime(price_df.index, utc=True, errors='coerce')
+        price_df = price_df.sort_index()
+        logger.info(f"[OK] Loaded pre-fetched dataset: {len(price_df):,} rows from {_large_cache}")
+    else:
+        logger.info("Pre-fetched dataset not found, collecting via API (2000 hours)...")
+        collector = CryptoDataCollector()
+        data = collector.collect_all_data('bitcoin', hours_back=2000)
+        price_df = data['price'].copy()
+        logger.info(f"[OK] Collected {len(price_df):,} rows via API")
+    logger.info(f"Date range : {price_df.index.min()} -> {price_df.index.max()}")
+    logger.info(f"Price range: ${price_df['close'].min():.2f} - ${price_df['close'].max():.2f}")
     print()
     
     # 2. Add simple features (only needs 200 periods max)

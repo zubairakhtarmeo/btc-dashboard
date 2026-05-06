@@ -69,3 +69,9 @@ Thumbs.db
 
 # Config (if contains sensitive info)
 config.json
+
+# Claude Code memory
+.claude/
+
+# Test scripts
+test_model.py

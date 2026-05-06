@@ -1411,7 +1411,7 @@ def add_simple_features(df):
     df['macd'] = ema_12 - ema_26
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
-    
+
     # Bollinger Bands
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
@@ -1419,7 +1419,7 @@ def add_simple_features(df):
     df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
     df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
-    
+
     # ATR
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
@@ -1428,12 +1428,36 @@ def add_simple_features(df):
     true_range = ranges.max(axis=1)
     df['atr_14'] = true_range.rolling(14).mean()
     df['atr_ratio'] = df['atr_14'] / df['close']
-    
+
     # Momentum
     df['momentum_consistency'] = (
         np.sign(df['return_1h']) == np.sign(df['return_6h'])
     ).astype(int)
-    
+
+    # --- Stronger signals: trend momentum, regime, breakout ---
+
+    # EMA slope: rate of change of each EMA over 3 candles.
+    df['ema_12_slope'] = ema_12.pct_change(3)
+    df['ema_26_slope'] = ema_26.pct_change(3)
+
+    # Price acceleration: change in 1H momentum (second derivative of price).
+    df['price_accel'] = df['return_1h'] - df['return_1h'].shift(1)
+
+    # Volatility regime: ratio of short-term to long-term volatility.
+    df['vol_regime'] = (df['volatility_7'] / df['volatility_50'].replace(0, np.nan)).clip(0, 5)
+
+    # RSI momentum: how fast RSI is moving.
+    df['rsi_slope'] = df['rsi_14'] - df['rsi_14'].shift(6)
+
+    # Proximity to 20-period high / low — captures breakout potential.
+    rolling_high_20 = df['close'].rolling(20).max()
+    rolling_low_20  = df['close'].rolling(20).min()
+    df['price_vs_high_20'] = (df['close'] - rolling_high_20) / rolling_high_20
+    df['price_vs_low_20']  = (df['close'] - rolling_low_20)  / rolling_low_20
+
+    # MACD acceleration: is MACD histogram momentum rising or falling?
+    df['macd_accel'] = df['macd_histogram'] - df['macd_histogram'].shift(3)
+
     return df.dropna()
 
 @st.cache_resource
